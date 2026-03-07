@@ -1,5 +1,6 @@
 {
   "_comment": "OpenClaw 設定 — AI秘書構成。~/.openclaw/openclaw.json にマージする。",
+  "_provider_guide": "使用するプロバイダの env を設定し、agents.defaults.model.primary を変更する",
 
   "gateway": {
     "http": {
@@ -11,8 +12,35 @@
     }
   },
 
-  "agent": {
-    "model": "anthropic/claude-sonnet-4-5-20250514"
+  "models": {
+    "providers": {
+      "ollama": {
+        "_comment": "ローカル LLM (コスト 0・プライベート・オフライン可)",
+        "baseUrl": "http://127.0.0.1:11434",
+        "apiKey": "ollama-local",
+        "api": "ollama"
+      },
+      "openrouter": {
+        "_comment": "OpenRouter 経由で各社モデルを利用 (従量課金)",
+        "apiKey": "${OPENROUTER_API_KEY}"
+      }
+    }
+  },
+
+  "agents": {
+    "defaults": {
+      "model": {
+        "_options": {
+          "A_local":  "ollama/qwen2.5:7b",
+          "B_router": "openrouter/anthropic/claude-sonnet-4-5",
+          "C_direct": "anthropic/claude-sonnet-4-5-20250514"
+        },
+        "primary": "ollama/qwen2.5:7b",
+        "fallbacks": [
+          "openrouter/anthropic/claude-sonnet-4-5"
+        ]
+      }
+    }
   },
 
   "skills": {

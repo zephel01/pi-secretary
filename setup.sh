@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 #  AI Secretary — Raspberry Pi 5 構築スクリプト
-#  完成構成: voice-bridge + OpenClaw + VOICEVOX + Docker sandbox
+#  完成構成: voice-bridge + OpenClaw + VOICEVOX + Ollama + Docker sandbox
 # ============================================================
 set -euo pipefail
 
@@ -28,7 +28,7 @@ info "=== AI Secretary セットアップ開始 ==="
 info "インストール先: ${INSTALL_DIR}"
 
 # ---------- 1. システムパッケージ ----------
-info "--- 1/8 システムパッケージ ---"
+info "--- 1/9 システムパッケージ ---"
 apt-get update -qq
 apt-get install -y -qq \
   git curl wget build-essential python3 python3-pip python3-venv \
@@ -46,7 +46,7 @@ fi
 info "Node.js $(node -v)"
 
 # ---------- 2. 専用ユーザー ----------
-info "--- 2/8 専用ユーザー作成 ---"
+info "--- 2/9 専用ユーザー作成 ---"
 if ! id "${SERVICE_USER}" &>/dev/null; then
   useradd -r -m -s /bin/bash "${SERVICE_USER}"
   usermod -aG docker "${SERVICE_USER}"
@@ -56,13 +56,13 @@ else
 fi
 
 # ---------- 3. ディレクトリ構成 ----------
-info "--- 3/8 ディレクトリ構成 ---"
+info "--- 3/9 ディレクトリ構成 ---"
 mkdir -p "${INSTALL_DIR}"/{voice-bridge/{custom,logs},voicevox/data,sandbox/workdir}
 mkdir -p "${INSTALL_DIR}/openclaw/tools"
 mkdir -p "${INSTALL_DIR}/openclaw/memory"
 
 # ---------- 4. OpenClaw インストール ----------
-info "--- 4/8 OpenClaw Gateway ---"
+info "--- 4/9 OpenClaw Gateway ---"
 if ! command -v openclaw &>/dev/null; then
   info "OpenClaw CLI をインストール中..."
 
@@ -90,8 +90,23 @@ fi
 if [[ ! -d "${OPENCLAW_HOME}" ]]; then
   info "OpenClaw の初期設定を実行します (非対話モード)..."
 
-  # API キーが環境変数にあれば --auth-choice で自動設定
-  if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+  # プロバイダの優先順位: OpenRouter > Anthropic API > スキップ (Ollama のみ)
+  if [[ -n "${OPENROUTER_API_KEY:-}" ]]; then
+    info "OPENROUTER_API_KEY を検出 — OpenRouter プロバイダで設定します"
+    sudo -u "${SERVICE_USER}" \
+      OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" \
+      openclaw onboard \
+        --non-interactive \
+        --flow quickstart \
+        --yes \
+        --auth-choice apiKey \
+        --token-provider openrouter \
+        --token "${OPENROUTER_API_KEY}" \
+        --install-daemon \
+        --gateway-port 18789 || {
+      warn "openclaw onboard (OpenRouter) が失敗しました"
+    }
+  elif [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
     info "ANTHROPIC_API_KEY を検出 — Anthropic プロバイダで設定します"
     sudo -u "${SERVICE_USER}" \
       ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY}" \
@@ -101,10 +116,10 @@ if [[ ! -d "${OPENCLAW_HOME}" ]]; then
         --yes \
         --install-daemon \
         --gateway-port 18789 || {
-      warn "openclaw onboard (自動) が失敗しました"
+      warn "openclaw onboard (Anthropic) が失敗しました"
     }
   else
-    # API キーなし — 最小構成で初期化し、後で手動設定
+    # API キーなし — 最小構成で初期化 (Ollama のみで運用可)
     sudo -u "${SERVICE_USER}" \
       openclaw onboard \
         --non-interactive \
@@ -115,9 +130,10 @@ if [[ ! -d "${OPENCLAW_HOME}" ]]; then
         --gateway-port 18789 || {
       warn "openclaw onboard (スキップモード) が失敗しました"
     }
-    warn "API キーが未設定です。後で以下を実行してください:"
-    warn "  sudo -u ${SERVICE_USER} openclaw config set agent.apiKey <YOUR_KEY>"
-    warn "  または環境変数 ANTHROPIC_API_KEY を設定して再実行"
+    warn "クラウド API キーが未設定です。Ollama (ローカル LLM) のみで動作します。"
+    warn "クラウドモデルを使う場合は以下のいずれかを設定してください:"
+    warn "  export OPENROUTER_API_KEY=sk-or-..."
+    warn "  export ANTHROPIC_API_KEY=sk-ant-..."
   fi
 else
   info "OpenClaw は設定済みです: ${OPENCLAW_HOME}"
@@ -156,7 +172,7 @@ if [[ -d "${WORKSPACE}" ]]; then
 fi
 
 # ---------- 5. voice-bridge ----------
-info "--- 5/8 voice-bridge ---"
+info "--- 5/9 voice-bridge ---"
 if [[ ! -d "${INSTALL_DIR}/voice-bridge/.git" ]]; then
   info "voice-bridge を GitHub からクローン中..."
   cd "${INSTALL_DIR}"
@@ -207,7 +223,7 @@ if [[ ! -d "${INSTALL_DIR}/voice-bridge/venv" ]]; then
 fi
 
 # ---------- 6. VOICEVOX Engine ----------
-info "--- 6/8 VOICEVOX Engine ---"
+info "--- 6/9 VOICEVOX Engine ---"
 VOICEVOX_VERSION="0.21.1"
 VOICEVOX_DIR="${INSTALL_DIR}/voicevox"
 
@@ -238,8 +254,45 @@ else
   info "VOICEVOX Engine は既にインストール済みです"
 fi
 
-# ---------- 7. ツール群とDocker sandbox ----------
-info "--- 7/8 ツール群 & Docker sandbox ---"
+# ---------- 7. Ollama (ローカル LLM) ----------
+info "--- 7/9 Ollama (ローカル LLM) ---"
+if ! command -v ollama &>/dev/null; then
+  info "Ollama をインストール中..."
+  curl -fsSL https://ollama.ai/install.sh | bash 2>/dev/null || {
+    warn "Ollama のインストールに失敗しました。手動でインストールしてください:"
+    warn "  curl -fsSL https://ollama.ai/install.sh | bash"
+  }
+fi
+
+if command -v ollama &>/dev/null; then
+  info "Ollama $(ollama --version 2>/dev/null || echo '') をインストール済み"
+
+  # Ollama サービスが動いていなければ起動
+  if ! curl -sf http://127.0.0.1:11434/api/tags &>/dev/null; then
+    if pidof systemd &>/dev/null; then
+      systemctl enable --now ollama 2>/dev/null || true
+    else
+      warn "Ollama サービスを手動で起動してください: ollama serve &"
+    fi
+  fi
+
+  # 推奨モデルをプル (Pi 5 8GB 向け)
+  OLLAMA_MODEL="${OLLAMA_MODEL:-qwen2.5:7b}"
+  if ! sudo -u "${SERVICE_USER}" ollama list 2>/dev/null | grep -q "${OLLAMA_MODEL}"; then
+    info "モデル ${OLLAMA_MODEL} をダウンロード中 (数分かかります)..."
+    sudo -u "${SERVICE_USER}" ollama pull "${OLLAMA_MODEL}" 2>/dev/null || {
+      warn "モデル ${OLLAMA_MODEL} のダウンロードに失敗しました"
+      warn "手動で実行: ollama pull ${OLLAMA_MODEL}"
+    }
+  else
+    info "モデル ${OLLAMA_MODEL} は取得済みです"
+  fi
+else
+  warn "Ollama のインストールをスキップしました"
+fi
+
+# ---------- 8. ツール群とDocker sandbox ----------
+info "--- 8/9 ツール群 & Docker sandbox ---"
 
 # 秘書ツールを配置
 for tool in get_schedule.py get_todos.py add_note.py check_status.sh; do
@@ -263,8 +316,8 @@ cd "${INSTALL_DIR}/sandbox"
 docker compose pull 2>/dev/null || docker-compose pull 2>/dev/null || true
 info "Docker sandbox イメージを取得しました"
 
-# ---------- 8. systemd サービス ----------
-info "--- 8/8 systemd サービス ---"
+# ---------- 9. systemd サービス ----------
+info "--- 9/9 systemd サービス ---"
 
 # サービスファイルを /etc/systemd/system/ に配置
 # (systemd がなくてもファイルコピーは行う — 実機移行時に使用)
