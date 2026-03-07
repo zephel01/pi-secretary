@@ -1,0 +1,46 @@
+[Unit]
+Description=voice-bridge — 音声I/O (STT/TTS)
+After=network.target openclaw.service voicevox.service sound.target
+Wants=openclaw.service voicevox.service
+
+[Service]
+Type=simple
+User=aiagent
+Group=aiagent
+# audio グループで ALSA デバイスアクセス
+SupplementaryGroups=audio
+
+WorkingDirectory=/opt/ai-secretary/voice-bridge
+
+# venv の Python で main_headless.py を起動
+# (元の main.py は GUI 付き翻訳アプリ。秘書構成ではヘッドレス版を使う)
+ExecStart=/opt/ai-secretary/voice-bridge/venv/bin/python main_headless.py
+
+# .env を読み込む
+EnvironmentFile=/opt/ai-secretary/voice-bridge/.env
+
+Restart=always
+RestartSec=3
+TimeoutStartSec=60
+
+# セキュリティ (audio デバイスアクセスのため一部緩和)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/ai-secretary/voice-bridge/logs
+
+# STT モデルロードにメモリが必要
+MemoryMax=2G
+CPUQuota=200%
+
+# ALSA デバイスアクセス
+DeviceAllow=/dev/snd/* rw
+DeviceAllow=char-alsa rw
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=voice-bridge
+
+[Install]
+WantedBy=multi-user.target

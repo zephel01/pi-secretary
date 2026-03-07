@@ -1,0 +1,73 @@
+# ============================================================
+#  Docker sandbox — 危険処理の隔離用
+#  OpenClaw 本体はホスト、ツール実行だけ Docker
+# ============================================================
+
+services:
+  tool-sandbox:
+    image: python:3.11-slim
+    container_name: ai-secretary-sandbox
+    working_dir: /workspace
+
+    # --- セキュリティ: 最大限の隔離 ---
+    network_mode: "none"          # ネットワーク完全遮断
+    read_only: true               # ファイルシステム読み取り専用
+
+    # 書き込み可能な一時領域
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid
+
+    volumes:
+      # ワークディレクトリだけ読み書き可能
+      - /opt/ai-secretary/sandbox/workdir:/workspace:rw
+
+    security_opt:
+      - no-new-privileges:true    # 権限昇格禁止
+
+    # root で実行しない
+    user: "1000:1000"
+
+    # リソース制限
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          memory: 64M
+
+    # デフォルトでは sleep で待機 (OpenClaw から docker exec で呼ぶ)
+    command: ["sleep", "infinity"]
+    restart: unless-stopped
+
+    # 不要な権限を落とす
+    cap_drop:
+      - ALL
+
+  # --- Python 実行用 (よく使うライブラリ入り) ---
+  python-runner:
+    image: python:3.11-slim
+    container_name: ai-secretary-python
+    working_dir: /workspace
+    network_mode: "none"
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,noexec,nosuid
+    volumes:
+      - /opt/ai-secretary/sandbox/workdir:/workspace:rw
+    security_opt:
+      - no-new-privileges:true
+    user: "1000:1000"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    # 起動時に便利パッケージをインストール (tmpfs 内)
+    command: >
+      sh -c "pip install --user --no-cache-dir
+      requests beautifulsoup4 pandas pyyaml 2>/dev/null;
+      sleep infinity"
+    restart: unless-stopped
+    cap_drop:
+      - ALL

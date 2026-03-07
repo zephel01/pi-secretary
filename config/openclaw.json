@@ -1,0 +1,25 @@
+{
+  "_comment": "OpenClaw 設定 — AI秘書構成。~/.openclaw/openclaw.json にマージする。",
+
+  "gateway": {
+    "http": {
+      "endpoints": {
+        "chatCompletions": {
+          "enabled": true
+        }
+      }
+    }
+  },
+
+  "agent": {
+    "model": "anthropic/claude-sonnet-4-5-20250514"
+  },
+
+  "skills": {
+    "load": {
+      "extraDirs": [
+        "/opt/ai-secretary/openclaw/tools"
+      ]
+    }
+  }
+}

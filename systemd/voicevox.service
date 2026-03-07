@@ -1,0 +1,40 @@
+[Unit]
+Description=VOICEVOX Engine — ずんだもん音声合成
+After=network.target
+
+[Service]
+Type=simple
+User=aiagent
+Group=aiagent
+WorkingDirectory=/opt/ai-secretary/voicevox
+
+# VOICEVOX Engine 起動
+# --host 127.0.0.1 でループバックのみ
+# --port 50021 (デフォルト)
+# --cpu_num_threads 2 (Pi 5 の 4コアのうち 2コアを割り当て)
+ExecStart=/opt/ai-secretary/voicevox/engine/run \
+  --host 127.0.0.1 \
+  --port 50021 \
+  --cpu_num_threads 2 \
+  --allow_origin http://127.0.0.1:18789
+
+Restart=always
+RestartSec=5
+TimeoutStartSec=120
+
+# セキュリティ
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+# VOICEVOX は起動時にモデルをロードするのでメモリ多め
+MemoryMax=2G
+CPUQuota=200%
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=voicevox
+
+[Install]
+WantedBy=multi-user.target

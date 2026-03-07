@@ -1,0 +1,14 @@
+# ============================================================
+#  VOICEVOX Engine モックサーバー
+#  テスト環境用 — 実際の音声合成はせず API 互換レスポンスを返す
+# ============================================================
+FROM --platform=linux/arm64 python:3.11-slim-bookworm
+
+RUN pip install --no-cache-dir flask
+
+COPY voicevox_mock.py /app/voicevox_mock.py
+
+WORKDIR /app
+EXPOSE 50021
+
+CMD ["python", "voicevox_mock.py"]

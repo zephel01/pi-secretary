@@ -1,0 +1,125 @@
+{
+  "$schema": "※ このファイルは参考用です。実際の OpenClaw 設定は ~/.openclaw/openclaw.json を使います。openclaw.json を参照してください。",
+
+  "gateway": {
+    "host": "127.0.0.1",
+    "port": 3000,
+    "cors": false,
+    "websocket": {
+      "enabled": true,
+      "auth": true
+    }
+  },
+
+  "auth": {
+    "secret": "CHANGE_ME_TO_RANDOM_SECRET_32_CHARS_MIN",
+    "allowedOrigins": ["http://127.0.0.1:*"]
+  },
+
+  "agents": {
+    "secretary": {
+      "name": "ずんだもん秘書",
+      "model": "gpt-4o-mini",
+      "systemPrompt": "/opt/ai-secretary/openclaw/prompts/secretary.md",
+      "temperature": 0.4,
+      "maxTokens": 512,
+      "tools": [
+        "get_today_schedule",
+        "get_todos",
+        "add_note",
+        "check_system_status"
+      ],
+      "memory": {
+        "enabled": true,
+        "backend": "file",
+        "path": "/opt/ai-secretary/openclaw/memory"
+      }
+    }
+  },
+
+  "tools": {
+    "get_today_schedule": {
+      "type": "script",
+      "command": "python3 /opt/ai-secretary/openclaw/tools/get_schedule.py",
+      "description": "今日の予定を取得する",
+      "timeout": 5000
+    },
+    "get_todos": {
+      "type": "script",
+      "command": "python3 /opt/ai-secretary/openclaw/tools/get_todos.py",
+      "description": "ToDoリストを取得・管理する",
+      "timeout": 5000,
+      "parameters": {
+        "action": {
+          "type": "string",
+          "enum": ["list", "add", "complete", "delete"],
+          "default": "list"
+        },
+        "text": {
+          "type": "string",
+          "description": "追加するToDoのテキスト"
+        },
+        "id": {
+          "type": "integer",
+          "description": "操作対象のToDoのID"
+        }
+      }
+    },
+    "add_note": {
+      "type": "script",
+      "command": "python3 /opt/ai-secretary/openclaw/tools/add_note.py",
+      "description": "メモを追加・検索する",
+      "timeout": 5000,
+      "parameters": {
+        "action": {
+          "type": "string",
+          "enum": ["add", "search", "list"],
+          "default": "add"
+        },
+        "text": {
+          "type": "string",
+          "description": "メモの内容またはキーワード"
+        }
+      }
+    },
+    "check_system_status": {
+      "type": "script",
+      "command": "bash /opt/ai-secretary/openclaw/tools/check_status.sh",
+      "description": "システムの状態を確認する",
+      "timeout": 10000
+    }
+  },
+
+  "channels": {
+    "_comment": "必要に応じて Telegram / Discord を追加",
+    "telegram": {
+      "enabled": false,
+      "token": "",
+      "allowedUsers": []
+    },
+    "discord": {
+      "enabled": false,
+      "token": "",
+      "allowedUsers": []
+    }
+  },
+
+  "sandbox": {
+    "enabled": true,
+    "runtime": "docker",
+    "image": "python:3.11-slim",
+    "networkMode": "none",
+    "readOnly": true,
+    "workdir": "/opt/ai-secretary/sandbox/workdir",
+    "timeout": 30000
+  },
+
+  "security": {
+    "bindLoopbackOnly": true,
+    "noNewPrivileges": true,
+    "rateLimiting": {
+      "enabled": true,
+      "maxRequestsPerMinute": 30
+    }
+  }
+}

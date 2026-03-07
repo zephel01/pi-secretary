@@ -1,0 +1,27 @@
+# voice-bridge Raspberry Pi 5 向け依存パッケージ
+# pip install -r requirements-pi.txt --break-system-packages
+# (venv 使用時は --break-system-packages 不要)
+
+# === STT ===
+faster-whisper>=1.0.0       # Whisper ベース音声認識 (int8 CPU 対応)
+
+# === AI Chat (translator.py の代替) ===
+openai>=1.0.0               # OpenAI 互換 API クライアント
+
+# === TTS ===
+edge-tts>=6.1.0             # Microsoft Edge TTS (フォールバック用)
+
+# === オーディオ ===
+sounddevice>=0.4.6          # ALSA 入出力 (macOS/Linux/Windows 共通)
+numpy>=1.24.0               # 信号処理
+pygame>=2.5.0               # 音声再生
+
+# === HTTP ===
+requests>=2.28.0            # VOICEVOX API 等
+
+# === ユーティリティ ===
+python-dotenv>=1.0.0        # .env ファイル読み込み (任意)
+
+# === 以下は元の requirements.txt から削除 ===
+# deep-translator          # 不要: Google翻訳は使わない
+# PyAudioWPatch            # 不要: Windows 専用

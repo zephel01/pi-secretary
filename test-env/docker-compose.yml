@@ -1,0 +1,61 @@
+# ============================================================
+#  AI Secretary テスト環境 (macOS Apple Silicon)
+#  docker compose -f test-env/docker-compose.yml up
+# ============================================================
+version: "3.9"
+
+services:
+  # ----- メインの Pi 5 模擬コンテナ -----
+  pi-secretary:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai-secretary-test
+    hostname: raspberrypi
+    platform: linux/arm64
+
+    volumes:
+      # プロジェクトルートをマウント (setup.sh 等)
+      - ..:/mnt/pi-secretary-setup:ro
+      # supervisor 設定
+      - ./supervisor:/etc/supervisor/conf.d:ro
+      # Docker ソケット (sandbox テスト用 — macOS では任意)
+      # - /var/run/docker.sock:/var/run/docker.sock
+
+    ports:
+      - "18789:18789"   # OpenClaw Gateway
+      - "50021:50021"   # VOICEVOX Engine
+
+    environment:
+      - TERM=xterm-256color
+      - LANG=ja_JP.UTF-8
+      # VOICEVOX モック用
+      - VOICEVOX_MOCK=1
+      # OpenClaw テスト用ダミー API キー
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-sk-test-dummy-key}
+
+    # リソース制限 (Pi 5 の 8GB を模擬)
+    deploy:
+      resources:
+        limits:
+          memory: 6G
+          cpus: "4.0"
+
+    tty: true
+    stdin_open: true
+
+  # ----- VOICEVOX Engine モック -----
+  # 実際の VOICEVOX ARM64 バイナリは重いのでモックサーバーを使用
+  voicevox-mock:
+    build:
+      context: .
+      dockerfile: Dockerfile.voicevox-mock
+    container_name: voicevox-mock
+    platform: linux/arm64
+    ports:
+      - "50022:50021"   # ホスト側は 50022 で公開 (衝突回避)
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"

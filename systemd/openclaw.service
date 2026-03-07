@@ -1,0 +1,45 @@
+[Unit]
+Description=OpenClaw Gateway — AI秘書ゲートウェイ
+After=network.target
+Wants=voicevox.service
+
+[Service]
+Type=simple
+User=aiagent
+Group=aiagent
+
+# OpenClaw はホームディレクトリ (~/.openclaw) に設定を持つ
+WorkingDirectory=/home/aiagent
+
+# OpenClaw 推奨環境変数
+Environment=OPENCLAW_NO_RESPAWN=1
+Environment=NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache
+Environment=NODE_ENV=production
+
+# Gateway 起動 (デフォルトポート: 18789, loopback のみ)
+# openclaw onboard --install-daemon で自動生成される場合はそちらが優先
+ExecStart=/usr/local/bin/openclaw gateway --port 18789 --verbose
+Restart=always
+RestartSec=2
+TimeoutStartSec=90
+
+# セキュリティ強化
+NoNewPrivileges=true
+PrivateTmp=true
+# OpenClaw は ~/.openclaw に読み書きするため ProtectHome は使わない
+ProtectSystem=strict
+ReadWritePaths=/home/aiagent/.openclaw
+ReadWritePaths=/opt/ai-secretary/openclaw/memory
+ReadWritePaths=/var/tmp/openclaw-compile-cache
+
+# リソース制限 (Pi 5: 8GB の場合)
+MemoryMax=1G
+CPUQuota=150%
+
+# ログ
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=openclaw
+
+[Install]
+WantedBy=multi-user.target
