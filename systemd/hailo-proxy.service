@@ -1,0 +1,20 @@
+[Unit]
+Description=hailo-proxy — OpenClaw ↔ hailo-ollama 互換プロキシ
+After=network.target
+Wants=openclaw.service
+
+[Service]
+Type=simple
+User=aiagent
+Group=aiagent
+ExecStart=/usr/bin/python3 /opt/ai-secretary/openclaw/tools/hailo-proxy.py
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hailo-proxy
+
+[Install]
+WantedBy=multi-user.target
