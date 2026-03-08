@@ -212,6 +212,32 @@ STT が全体の約 45% を占める最大のボトルネックです。
 - **クラウド LLM** — OpenRouter / Anthropic API を使えば LLM 応答は 1 秒以下に短縮
 - **VOICEVOX GPU** — CUDA 対応 GPU があれば TTS も大幅に高速化（Pi 5 では非対応）
 
+### 使い分けガイド — 対話モード vs 通知・報告モード
+
+STT が全体の約 45% を占めるため、用途に応じてモードを使い分けることで体感速度が大きく変わります。
+
+| モード | 処理 | 所要時間 | 用途例 |
+|---|---|---|---|
+| **対話モード** | STT → LLM → TTS | 約 20 秒 | 音声で質問・命令 |
+| **通知・報告モード** | LLM → TTS のみ | **約 10 秒** | 予定読み上げ・調査結果報告・定時通知 |
+
+通知・報告モードは STT を使わず、スクリプトやスケジューラから直接 OpenClaw API を叩いて結果を VOICEVOX で読み上げます。STT の 9 秒をスキップできるため、実用的な速度で動作します。
+
+```bash
+# 通知モードの例: 今日の予定をずんだもんに読み上げてもらう
+RESPONSE=$(curl -s http://127.0.0.1:18789/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"openclaw","messages":[{"role":"user","content":"今日の予定を教えて"}]}' \
+  | jq -r '.choices[0].message.content')
+
+curl -s "http://127.0.0.1:50021/audio_query?text=${RESPONSE}&speaker=3" | \
+  curl -s -H 'Content-Type:application/json' -d @- \
+  'http://127.0.0.1:50021/synthesis?speaker=3' > /tmp/notify.wav
+aplay /tmp/notify.wav
+```
+
+cron と組み合わせれば「毎朝 8 時にずんだもんが今日の予定を読み上げる」といった使い方が可能です。
+
 ### 既知の制限
 
 - **サンプルレート** — USB スピーカーフォンは 48000Hz のみ対応のものが多い（Anker PowerConf S3 等）。faster-whisper は 16000Hz、VOICEVOX は 24000Hz のため、voice-bridge 内でリサンプルが必要。`_resample()` (scipy) で自動変換している
