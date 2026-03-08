@@ -23,12 +23,12 @@ Restart=always
 RestartSec=3
 TimeoutStartSec=60
 
-# セキュリティ (audio デバイスアクセスのため一部緩和)
+# セキュリティ (最小限 — NAMESPACE エラー回避)
 NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/opt/ai-secretary/voice-bridge/logs
+#PrivateTmp=true
+#ProtectSystem=strict
+#ProtectHome=true
+#ReadWritePaths=/opt/ai-secretary/voice-bridge/logs
 
 # STT モデルロードにメモリが必要
 MemoryMax=2G
