@@ -18,7 +18,7 @@ Environment=NODE_ENV=production
 
 # Gateway 起動 (デフォルトポート: 18789, loopback のみ)
 # openclaw onboard --install-daemon で自動生成される場合はそちらが優先
-ExecStart=/usr/local/bin/openclaw gateway --port 18789 --verbose
+ExecStart=/usr/bin/openclaw gateway --port 18789 --verbose
 Restart=always
 RestartSec=2
 TimeoutStartSec=90
