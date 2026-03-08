@@ -252,18 +252,85 @@ pip install -r requirements-pi.txt
 
 本システムは複数の LLM プロバイダに対応しています。用途に応じて使い分けてください。
 
-### 4.1 プロバイダ比較
+### 4.1 対応プロバイダ一覧
+
+OpenClaw は以下のプロバイダに対応しています。`setup.sh` 実行時に環境変数を渡すか、後から `~/.openclaw/.env` に設定してください。
+
+#### 主要プロバイダ
+
+| プロバイダ | 環境変数 | モデル参照形式 | 備考 |
+|---|---|---|---|
+| **Ollama (ローカル)** | `OLLAMA_API_KEY` (任意の値) | `ollama/<model>` | 無料・オフライン可。Pi 5 推奨 |
+| **OpenRouter** | `OPENROUTER_API_KEY` | `openrouter/<provider>/<model>` | 統一 API。Claude/GPT/Gemini 等 |
+| **Anthropic** | `ANTHROPIC_API_KEY` | `anthropic/<model>` | OAuth 禁止。API キーのみ |
+| **OpenAI** | `OPENAI_API_KEY` | `openai/<model>` | GPT-4o 等 |
+| **Google Gemini** | `GEMINI_API_KEY` または `GOOGLE_API_KEY` | `google/<model>` | Gemini 2.0 等 |
+| **GLM (Z.AI / 智谱)** | `ZAI_API_KEY` | `zai/<model>` | GLM-5 等。ツール呼び出しに強い |
+
+#### その他のプロバイダ
+
+| プロバイダ | 環境変数 | モデル参照形式 |
+|---|---|---|
+| Mistral | `MISTRAL_API_KEY` | `mistral/<model>` |
+| xAI (Grok) | `XAI_API_KEY` | `xai/<model>` |
+| Groq | `GROQ_API_KEY` | `groq/<model>` |
+| DeepSeek | `DEEPSEEK_API_KEY` | `deepseek/<model>` |
+| MiniMax | `MINIMAX_API_KEY` | `minimax/<model>` |
+| Moonshot (Kimi) | `MOONSHOT_API_KEY` | `moonshot/<model>` |
+| HuggingFace | `HF_TOKEN` | `huggingface/<model>` |
+| Amazon Bedrock | `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` | `amazon-bedrock/<model>` |
+| vLLM | `VLLM_API_KEY` | `vllm/<model>` |
+| GitHub Copilot | OAuth (デバイスフロー) | `github-copilot/<model>` |
+
+#### Alibaba Cloud Coding Plan (百炼)
+
+Alibaba Cloud の Coding Plan は月額定額で複数モデルを利用できるサブスクリプションサービスです。
+OpenClaw でのトークン消費コストを大幅に削減できます。
+
+| 項目 | 値 |
+|---|---|
+| API キー取得 | [Alibaba Cloud Model Studio](https://modelstudio.console.alibabacloud.com/) の Coding Plan ページ |
+| baseURL | `https://coding-intl.dashscope.aliyuncs.com/v1` |
+| API 形式 | `openai-completions` |
+| 対応モデル | qwen3.5-plus, qwen3-coder-next, qwen3-coder-plus, MiniMax-M2.5, glm-5, glm-4.7, kimi-k2.5 等 |
+
+`openclaw.json` での設定:
+
+```json
+{
+  "models": {
+    "providers": {
+      "bailian": {
+        "baseUrl": "https://coding-intl.dashscope.aliyuncs.com/v1",
+        "apiKey": "YOUR_CODING_PLAN_API_KEY",
+        "api": "openai-completions"
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "bailian/qwen3.5-plus"
+      }
+    }
+  }
+}
+```
+
+上記以外にも、OpenAI 互換または Anthropic 互換の任意の HTTP エンドポイントをカスタムプロバイダとして `openclaw.json` の `models.providers` に追加できます。
+
+### 4.2 プロバイダ比較 (推奨構成)
 
 | プロバイダ | コスト | 品質 | オフライン | 備考 |
 |---|---|---|---|---|
 | **Ollama (ローカル)** | 無料 | △〜○ (7B モデル) | ○ | Pi 5 8GB で qwen2.5:7b 推奨 |
-| **OpenRouter** | 従量課金 | ◎ | × | 複数モデル統一 API。Claude/GPT/Gemini 等 |
+| **OpenRouter** | 従量課金 | ◎ | × | 複数モデル統一 API。1 キーで全社モデル |
 | **Anthropic API** | 従量課金 | ◎ | × | OAuth 禁止。API キーのみ |
 | **OpenAI API** | 従量課金 | ◎ | × | GPT-4o 等 |
 
 > **注意**: 2026年1月以降、Anthropic は Claude Pro/Max サブスクリプションの OAuth トークンを OpenClaw 等の第三者ツールで使用することを禁止しています。Anthropic を使う場合は API キー（従量課金）が必要です。
 
-### 4.2 プロバイダ A: Ollama (ローカル LLM) — 推奨デフォルト
+### 4.3 プロバイダ A: Ollama (ローカル LLM) — 推奨デフォルト
 
 コスト 0 で完全プライベート。Pi 5 上で動作する軽量モデルを使用します。
 
@@ -306,7 +373,7 @@ curl -s http://127.0.0.1:11434/api/tags | jq '.models[].name'
 
 > **重要**: Ollama の baseUrl に `/v1` を付けないでください。ネイティブ API を使用する必要があります。
 
-### 4.3 プロバイダ B: OpenRouter — クラウド推奨
+### 4.4 プロバイダ B: OpenRouter — クラウド推奨
 
 OpenRouter は統合 API で、1 つの API キーで Claude / GPT / Gemini など複数のモデルにアクセスできます。
 
@@ -342,7 +409,7 @@ openclaw onboard --auth-choice apiKey \
 | GPT-4o | `openrouter/openai/gpt-4o` | 高速 |
 | Gemini 2.0 Flash | `openrouter/google/gemini-2.0-flash` | 低コスト |
 
-### 4.4 プロバイダ C: Anthropic API (直接)
+### 4.5 プロバイダ C: Anthropic API (直接)
 
 Anthropic API キーを直接使用する場合。
 
@@ -362,7 +429,7 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 }
 ```
 
-### 4.5 ハイブリッド構成 (推奨)
+### 4.6 ハイブリッド構成 (推奨)
 
 ローカル LLM をデフォルトにし、複雑なタスクはクラウドにフォールバックする構成:
 
@@ -383,7 +450,7 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 
 この構成では通常は Ollama で処理し、Ollama がエラーやタイムアウトの場合に自動でクラウドにフォールバックします。
 
-### 4.6 プロバイダ切り替え後の確認
+### 4.7 プロバイダ切り替え後の確認
 
 ```bash
 # OpenClaw 設定の検証

@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+dist/
+build/
+*.whl
+.venv/
+venv/
+env/
+
+# Environment / Secrets
+.env
+*.env.local
+config/*.key
+config/*.secret
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+logs/
+
+# Docker (runtime)
+docker/data/
+
+# Docs
+docs/note/
+
+# Test artifacts
+test-env/__pycache__/
