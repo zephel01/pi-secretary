@@ -97,11 +97,10 @@ if [[ ! -d "${OPENCLAW_HOME}" ]]; then
       OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" \
       openclaw onboard \
         --non-interactive \
+        --accept-risk \
         --flow quickstart \
-        --yes \
-        --auth-choice apiKey \
-        --token-provider openrouter \
-        --token "${OPENROUTER_API_KEY}" \
+        --auth-choice openrouter-api-key \
+        --openrouter-api-key "${OPENROUTER_API_KEY}" \
         --install-daemon \
         --gateway-port 18789 || {
       warn "openclaw onboard (OpenRouter) が失敗しました"
@@ -112,8 +111,10 @@ if [[ ! -d "${OPENCLAW_HOME}" ]]; then
       ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY}" \
       openclaw onboard \
         --non-interactive \
+        --accept-risk \
         --flow quickstart \
-        --yes \
+        --auth-choice anthropic-api-key \
+        --anthropic-api-key "${ANTHROPIC_API_KEY}" \
         --install-daemon \
         --gateway-port 18789 || {
       warn "openclaw onboard (Anthropic) が失敗しました"
@@ -123,8 +124,8 @@ if [[ ! -d "${OPENCLAW_HOME}" ]]; then
     sudo -u "${SERVICE_USER}" \
       openclaw onboard \
         --non-interactive \
+        --accept-risk \
         --flow quickstart \
-        --yes \
         --auth-choice skip \
         --install-daemon \
         --gateway-port 18789 || {
@@ -224,31 +225,35 @@ fi
 
 # ---------- 6. VOICEVOX Engine ----------
 info "--- 6/9 VOICEVOX Engine ---"
-VOICEVOX_VERSION="0.21.1"
+VOICEVOX_VERSION="0.25.1"
 VOICEVOX_DIR="${INSTALL_DIR}/voicevox"
 
 if [[ ! -f "${VOICEVOX_DIR}/engine/run" ]]; then
   cd /tmp
-  VOICEVOX_ARCHIVE="voicevox_engine-linux-arm64-${VOICEVOX_VERSION}.7z.001"
+  VOICEVOX_ARCHIVE="voicevox_engine-linux-cpu-arm64-${VOICEVOX_VERSION}.7z.001"
+  VOICEVOX_URL="https://github.com/VOICEVOX/voicevox_engine/releases/download/${VOICEVOX_VERSION}/${VOICEVOX_ARCHIVE}"
 
-  if [[ ! -f "${VOICEVOX_ARCHIVE}" ]]; then
-    info "VOICEVOX Engine をダウンロード中..."
-    wget -q "https://github.com/VOICEVOX/voicevox_engine/releases/download/${VOICEVOX_VERSION}/voicevox_engine-linux-arm64-cpu-${VOICEVOX_VERSION}.7z.001" \
-      -O "${VOICEVOX_ARCHIVE}" 2>/dev/null || {
+  if [[ ! -f "${VOICEVOX_ARCHIVE}" ]] || [[ ! -s "${VOICEVOX_ARCHIVE}" ]]; then
+    rm -f "${VOICEVOX_ARCHIVE}"
+    info "VOICEVOX Engine ${VOICEVOX_VERSION} をダウンロード中..."
+    wget -q "${VOICEVOX_URL}" -O "${VOICEVOX_ARCHIVE}" || {
+      rm -f "${VOICEVOX_ARCHIVE}"
       warn "VOICEVOX ARM64 バイナリの自動ダウンロードに失敗しました"
       warn "手動で配置してください: ${VOICEVOX_DIR}/engine/"
-      warn "公式: https://github.com/VOICEVOX/voicevox_engine/releases"
+      warn "URL: ${VOICEVOX_URL}"
     }
   fi
 
-  if [[ -f "${VOICEVOX_ARCHIVE}" ]]; then
+  if [[ -f "${VOICEVOX_ARCHIVE}" ]] && [[ -s "${VOICEVOX_ARCHIVE}" ]]; then
     apt-get install -y -qq p7zip-full 2>/dev/null || true
     mkdir -p "${VOICEVOX_DIR}/engine"
-    7z x "${VOICEVOX_ARCHIVE}" -o"${VOICEVOX_DIR}/engine" 2>/dev/null || {
+    7z x -y "${VOICEVOX_ARCHIVE}" -o"${VOICEVOX_DIR}/engine" || {
       warn "7z 展開に失敗しました。手動で展開してください。"
     }
     chmod +x "${VOICEVOX_DIR}/engine/run" 2>/dev/null || true
     info "VOICEVOX Engine を展開しました"
+  else
+    warn "VOICEVOX アーカイブが見つからないか空です。スキップします。"
   fi
 else
   info "VOICEVOX Engine は既にインストール済みです"
