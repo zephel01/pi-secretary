@@ -37,7 +37,7 @@ apt-get install -y -qq \
   jq alsa-utils
 
 # Node.js 22+ が必要 (OpenClaw 要件)
-NODE_VER=$(node -v 2>/dev/null | sed 's/v//' | cut -d. -f1)
+NODE_VER=$(node -v 2>/dev/null | sed 's/v//' | cut -d. -f1 || true)
 if [[ "${NODE_VER:-0}" -lt 22 ]]; then
   info "Node.js 22 をインストールします..."
   curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
