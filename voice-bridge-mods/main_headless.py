@@ -179,16 +179,23 @@ class VoiceBridgeHeadless:
                 # 48000Hz -> 16000Hz にリサンプル (faster-whisper が要求)
                 if self.mic.sample_rate != 16000:
                     import numpy as np
-                    ratio = 16000 / self.mic.sample_rate
-                    new_len = int(len(audio) * ratio)
-                    indices = np.linspace(0, len(audio) - 1, new_len)
-                    audio = np.interp(indices, np.arange(len(audio)), audio).astype(np.float32)
+                    try:
+                        from scipy.signal import resample_poly
+                        from math import gcd
+                        g = gcd(16000, self.mic.sample_rate)
+                        audio = resample_poly(audio, 16000 // g, self.mic.sample_rate // g).astype(np.float32)
+                    except ImportError:
+                        ratio = 16000 / self.mic.sample_rate
+                        new_len = int(len(audio) * ratio)
+                        indices = np.linspace(0, len(audio) - 1, new_len)
+                        audio = np.interp(indices, np.arange(len(audio)), audio).astype(np.float32)
                 # numpy array を直接渡す
                 segments, info = self.stt.transcribe(
                     audio,
                     language=STT_LANGUAGE,
-                    beam_size=5,
+                    beam_size=3,
                     vad_filter=True,
+                    initial_prompt="こんにちは。今日はいい天気ですね。何かお手伝いできることはありますか？",
                 )
                 texts = [seg.text for seg in segments]
                 return " ".join(texts).strip()
