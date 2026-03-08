@@ -104,11 +104,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
             filtered["stream"] = False
 
             msg_count = len(filtered.get("messages", []))
-            log.info("Sending to hailo: messages=%d, stream=false", msg_count)
+            log.info("Sending to hailo: model=%s, messages=%d, stream=false", filtered.get("model"), msg_count)
 
             # curl で hailo-ollama に送信
             resp_text = _curl_post(f"{HAILO_URL}/api/chat", filtered)
-            log.info("Raw response length: %d", len(resp_text))
+            log.info("Raw response length: %d, body: %s", len(resp_text), resp_text[:200])
 
             if not resp_text.strip():
                 log.error("Empty response from hailo-ollama")
