@@ -101,6 +101,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     for msg in filtered["messages"]
                     if msg.get("role") in ("system", "user", "assistant")
                 ]
+                # system メッセージをコンパクトに (1.5B モデルのコンテキスト制限対策)
+                filtered["messages"] = self._compact_messages(filtered["messages"])
             filtered["stream"] = False
 
             msg_count = len(filtered.get("messages", []))
@@ -170,6 +172,35 @@ class ProxyHandler(BaseHTTPRequestHandler):
         except Exception as e:
             log.error("Chat error: %s", e, exc_info=True)
             self._send_error(502, str(e))
+
+    # システムプロンプトの最大文字数 (1.5B モデル向け)
+    MAX_SYSTEM_CHARS = 500
+
+    COMPACT_SYSTEM_PROMPT = (
+        "あなたはAI秘書「ずんだもん」です。"
+        "日本語で簡潔に応答してください。"
+        "ユーザーの質問や依頼に親切に答えてください。"
+        "語尾は「なのだ」を使ってください。"
+    )
+
+    def _compact_messages(self, messages: list) -> list:
+        """system メッセージが長すぎる場合、コンパクトなプロンプトに置換"""
+        result = []
+        for msg in messages:
+            if msg.get("role") == "system":
+                content = msg.get("content", "")
+                if len(content) > self.MAX_SYSTEM_CHARS:
+                    log.info(
+                        "Compacting system message: %d chars → %d chars",
+                        len(content),
+                        len(self.COMPACT_SYSTEM_PROMPT),
+                    )
+                    result.append({"role": "system", "content": self.COMPACT_SYSTEM_PROMPT})
+                else:
+                    result.append(msg)
+            else:
+                result.append(msg)
+        return result
 
     def _handle_tags(self):
         try:
