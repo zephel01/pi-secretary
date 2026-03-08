@@ -258,6 +258,20 @@ class MicCapture:
         self.stop_stream()
 
 
+# --- リサンプル ---
+
+def _resample(data: np.ndarray, orig_rate: int, target_rate: int) -> np.ndarray:
+    """numpy だけで簡易リサンプル (線形補間)"""
+    if orig_rate == target_rate:
+        return data
+    ratio = target_rate / orig_rate
+    new_len = int(len(data) * ratio)
+    indices = np.linspace(0, len(data) - 1, new_len)
+    return np.interp(indices, np.arange(len(data)), data).astype(data.dtype)
+
+
+PLAYBACK_RATE = int(os.getenv("AUDIO_SAMPLE_RATE", "48000"))
+
 # --- 再生ユーティリティ ---
 
 def play_wav(wav_path: str, device: Optional[str] = None):

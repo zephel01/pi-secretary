@@ -176,6 +176,13 @@ class VoiceBridgeHeadless:
             from faster_whisper import WhisperModel
 
             if isinstance(self.stt, WhisperModel):
+                # 48000Hz -> 16000Hz にリサンプル (faster-whisper が要求)
+                if self.mic.sample_rate != 16000:
+                    import numpy as np
+                    ratio = 16000 / self.mic.sample_rate
+                    new_len = int(len(audio) * ratio)
+                    indices = np.linspace(0, len(audio) - 1, new_len)
+                    audio = np.interp(indices, np.arange(len(audio)), audio).astype(np.float32)
                 # numpy array を直接渡す
                 segments, info = self.stt.transcribe(
                     audio,
