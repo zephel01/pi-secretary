@@ -6,12 +6,12 @@ Raspberry Pi 5 上で動作する音声 AI 秘書システムです。
 ## システム構成
 
 ```
-[USB スピーカーフォン]
+[USB スピーカーフォン (48000Hz)]
        ↓ 音声入力
 voice-bridge (main_headless.py)
-  ├─ STT: faster-whisper (音声→テキスト)
+  ├─ STT: faster-whisper (48000→16000Hz リサンプル→音声認識)
   ├─ Chat: OpenAI 互換 → OpenClaw Gateway
-  └─ TTS: VOICEVOX (テキスト→音声)
+  └─ TTS: VOICEVOX → 24000→48000Hz リサンプル → スピーカー
        ↓
 OpenClaw Gateway (127.0.0.1:18789)
   ├─ LLM: Ollama (ローカル) / OpenRouter / Anthropic API
@@ -19,6 +19,13 @@ OpenClaw Gateway (127.0.0.1:18789)
   ├─ メモリ / スキル
   ├─ ツール実行
   └─ Docker sandbox (危険処理の隔離)
+       ↓
+ollama-proxy (127.0.0.1:11435)
+  ├─ システムプロンプト圧縮 (22KB → 73文字)
+  ├─ tools/options フィールド除去
+  └─ stream 変換
+       ↓
+Ollama (127.0.0.1:11434)  ← または hailo-ollama :8000 (NPU)
        ↓
 VOICEVOX Engine (127.0.0.1:50021)
        ↓
@@ -31,6 +38,7 @@ VOICEVOX Engine (127.0.0.1:50021)
 |---|---|---|
 | **voice-bridge** | 音声入力 (STT)・AI チャット・音声出力 (TTS) | — |
 | **OpenClaw Gateway** | 秘書ロジック・ツール実行・メモリ管理 | 18789 |
+| **ollama-proxy** | システムプロンプト圧縮・フィールド除去 | 11435 |
 | **Ollama** | ローカル LLM ランタイム (コスト 0・オフライン可) | 11434 |
 | **VOICEVOX Engine** | ずんだもん音声合成 (speaker_id=3) | 50021 |
 | **Docker sandbox** | 危険コマンドの隔離実行 (ネットワーク遮断) | — |
@@ -45,7 +53,7 @@ VOICEVOX Engine (127.0.0.1:50021)
 | **OpenRouter** | 従量課金 | ◎ | × |
 | **Anthropic API** | 従量課金 | ◎ | × |
 
-デフォルトは Ollama (qwen2.5:7b) で、クラウドへのフォールバック構成を推奨しています。
+デフォルトは Ollama (qwen2.5:1.5b) で、クラウドへのフォールバック構成を推奨しています。
 詳細はセットアップ手順書の第 4 章を参照してください。
 
 > **注意**: 2026年1月以降、Anthropic は OAuth トークンの第三者ツール利用を禁止しています。
@@ -71,6 +79,7 @@ pi-secretary/
 │   ├── mic_capture_linux.py          # Linux 向けマイクキャプチャ
 │   └── requirements-pi.txt           # Pi 向け Python 依存パッケージ
 ├── tools/
+│   ├── hailo-proxy.py                # ollama-proxy (プロンプト圧縮プロキシ)
 │   ├── get_schedule.py               # 予定取得ツール
 │   ├── get_todos.py                  # ToDo 取得ツール
 │   ├── add_note.py                   # メモ追加ツール
@@ -78,7 +87,8 @@ pi-secretary/
 ├── systemd/
 │   ├── voicevox.service              # VOICEVOX systemd ユニット
 │   ├── voice-bridge.service          # voice-bridge systemd ユニット
-│   └── openclaw.service              # OpenClaw systemd ユニット
+│   ├── openclaw.service              # OpenClaw systemd ユニット
+│   └── hailo-proxy.service           # ollama-proxy systemd ユニット
 ├── docker/
 │   └── docker-compose.yml            # sandbox 用 Docker Compose
 ├── docs/
@@ -180,6 +190,34 @@ cd /mnt/pi-secretary-setup && bash setup.sh
 # 自動テスト (42 項目)
 bash /mnt/pi-secretary-setup/test-env/run-tests.sh
 ```
+
+## パフォーマンス (Raspberry Pi 5 実測値)
+
+Raspberry Pi 5 (8GB) + Anker PowerConf S3 + qwen2.5:1.5b での実測値です。
+発話から応答音声が出るまでの合計は約 20 秒です。
+
+| 処理 | 所要時間 | ボトルネック | 備考 |
+|---|---|---|---|
+| STT (faster-whisper small) | 約 9 秒 | **CPU** | int8 量子化済み。tiny なら約 3 秒だが精度低下 |
+| LLM (qwen2.5:1.5b CPU) | 約 3 秒 | CPU | ollama-proxy でプロンプトを 22KB→73 文字に圧縮 |
+| TTS (VOICEVOX) | 約 7 秒 | CPU | ARM64 版、cpu_num_threads=2 |
+| リサンプル | < 0.1 秒 | — | scipy.signal.resample_poly 使用 |
+
+### 高速化の選択肢
+
+STT が全体の約 45% を占める最大のボトルネックです。
+
+- **STT モデルサイズ変更** — `small` (精度◎・9秒) / `base` (精度○・4秒) / `tiny` (精度△・2秒) を `voice-bridge.env` の `STT_MODEL_SIZE` で切り替え可能
+- **Hailo-10H NPU** — Ollama 互換の hailo-ollama でLLM推論を NPU にオフロード可能。hailo-proxy.py のターゲットを `:8000` に変更するだけで切り替え可能
+- **クラウド LLM** — OpenRouter / Anthropic API を使えば LLM 応答は 1 秒以下に短縮
+- **VOICEVOX GPU** — CUDA 対応 GPU があれば TTS も大幅に高速化（Pi 5 では非対応）
+
+### 既知の制限
+
+- **サンプルレート** — USB スピーカーフォンは 48000Hz のみ対応のものが多い（Anker PowerConf S3 等）。faster-whisper は 16000Hz、VOICEVOX は 24000Hz のため、voice-bridge 内でリサンプルが必要。`_resample()` (scipy) で自動変換している
+- **OpenClaw システムプロンプト** — OpenClaw は AGENTS.md + SOUL.md 等を含む約 22KB のシステムプロンプトを送信する。1.5B パラメータの小型モデルではコンテキストを圧迫するため、ollama-proxy で 73 文字のずんだもんプロンプトに圧縮している
+- **tools フィールド** — OpenClaw は Ollama に `tools`（関数呼び出し定義）を送るが、小型モデルは非対応。ollama-proxy で除去している
+- **STT 誤認識** — faster-whisper small モデルでも短い発話や滑舌が悪い場合は誤認識が起きる。`initial_prompt` でヒントを与えて改善しているが完全ではない
 
 ## セキュリティ
 
