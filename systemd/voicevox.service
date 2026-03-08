@@ -12,7 +12,7 @@ WorkingDirectory=/opt/ai-secretary/voicevox
 # --host 127.0.0.1 でループバックのみ
 # --port 50021 (デフォルト)
 # --cpu_num_threads 2 (Pi 5 の 4コアのうち 2コアを割り当て)
-ExecStart=/opt/ai-secretary/voicevox/engine/run \
+ExecStart=/opt/ai-secretary/voicevox/engine/linux-cpu-arm64/run \
   --host 127.0.0.1 \
   --port 50021 \
   --cpu_num_threads 2 \
@@ -22,11 +22,11 @@ Restart=always
 RestartSec=5
 TimeoutStartSec=120
 
-# セキュリティ
+# セキュリティ (最小限 — NAMESPACE エラー回避)
 NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
+#PrivateTmp=true
+#ProtectSystem=strict
+#ProtectHome=true
 
 # VOICEVOX は起動時にモデルをロードするのでメモリ多め
 MemoryMax=2G
