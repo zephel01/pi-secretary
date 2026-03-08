@@ -39,6 +39,8 @@ def _curl_post(url: str, data: dict, timeout: int = 120) -> str:
         text=True,
         timeout=timeout + 5,
     )
+    if result.returncode != 0:
+        log.error("curl failed (rc=%d): stderr=%s", result.returncode, result.stderr[:300])
     return result.stdout
 
 
@@ -121,6 +123,12 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 "Request: model=%s, fields=%s, stream=%s",
                 data.get("model"), list(data.keys()), was_streaming,
             )
+
+            # 小モデル非対応フィールドを除去 (tools, options 等)
+            for key in ("tools", "options", "tool_choice"):
+                if key in data:
+                    log.info("Removing unsupported field: %s", key)
+                    del data[key]
 
             # システムプロンプトを圧縮
             if "messages" in data:
