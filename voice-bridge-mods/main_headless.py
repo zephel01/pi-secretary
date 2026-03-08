@@ -187,7 +187,7 @@ class VoiceBridgeHeadless:
                 segments, info = self.stt.transcribe(
                     audio,
                     language=STT_LANGUAGE,
-                    beam_size=3,
+                    beam_size=5,
                     vad_filter=True,
                 )
                 texts = [seg.text for seg in segments]
@@ -293,8 +293,10 @@ class VoiceBridgeHeadless:
         if audio is None or len(audio) < self.mic.sample_rate * 0.3:
             return  # 短すぎる
 
-        # STT
+        # STT (処理中はマイクを一時停止して overflow を防ぐ)
+        self.mic.stop_stream()
         text = self._transcribe(audio)
+        self.mic.start_stream()
         if not text:
             return
 
@@ -312,7 +314,9 @@ class VoiceBridgeHeadless:
             if self.mic.wait_for_speech(timeout=5.0):
                 audio2 = self.mic.record_utterance()
                 if audio2 is not None:
+                    self.mic.stop_stream()
                     command_text = self._transcribe(audio2)
+                    self.mic.start_stream()
 
         if not command_text:
             return
