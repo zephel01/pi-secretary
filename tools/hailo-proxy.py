@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 """
-hailo-proxy.py — OpenClaw ↔ hailo-ollama 互換プロキシ
+ollama-proxy.py — OpenClaw → Ollama 軽量プロキシ
 
-hailo-ollama は標準 Ollama の一部フィールドしか対応していないため、
-OpenClaw が送る追加フィールド (tools, options 等) を除去して転送する。
-stream=false を強制し、curl で hailo-ollama に送信、
-レスポンスを Ollama ストリーミング形式に変換して返す。
+OpenClaw の巨大システムプロンプト (AGENTS.md, SOUL.md 等) を
+小さいモデル向けにコンパクトに圧縮して通常 Ollama に転送する。
 
-ポート: 11434 → hailo-ollama :8000
+ポート: 11435 → Ollama :11434
 """
 
 import json
@@ -17,28 +15,24 @@ import sys
 from datetime import datetime, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-HAILO_URL = "http://127.0.0.1:8000"
-LISTEN_PORT = 11434
-
-ALLOWED_CHAT_FIELDS = {"model", "messages"}
-ALLOWED_MESSAGE_FIELDS = {"role", "content"}
+OLLAMA_URL = "http://127.0.0.1:11434"
+LISTEN_PORT = 11435
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [hailo-proxy] %(levelname)s: %(message)s",
+    format="%(asctime)s [ollama-proxy] %(levelname)s: %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-log = logging.getLogger("hailo-proxy")
+log = logging.getLogger("ollama-proxy")
 
 
 def _curl_post(url: str, data: dict, timeout: int = 120) -> str:
     """curl で POST して結果を文字列で返す"""
-    body = json.dumps(data)
     result = subprocess.run(
         [
             "curl", "-s", "--max-time", str(timeout),
             "-H", "Content-Type: application/json",
-            "-d", body,
+            "-d", json.dumps(data),
             url,
         ],
         capture_output=True,
@@ -59,18 +53,50 @@ def _curl_get(url: str, timeout: int = 10) -> str:
     return result.stdout
 
 
+# ---------- システムプロンプト圧縮 ----------
+
+MAX_SYSTEM_CHARS = 500
+
+COMPACT_SYSTEM_PROMPT = (
+    "あなたはAI秘書「ずんだもん」です。"
+    "日本語で簡潔に応答してください。"
+    "ユーザーの質問や依頼に親切に答えてください。"
+    "語尾は「なのだ」を使ってください。"
+)
+
+
+def _compact_messages(messages: list) -> list:
+    """system メッセージが長すぎる場合、コンパクトなプロンプトに置換"""
+    result = []
+    for msg in messages:
+        if msg.get("role") == "system":
+            content = msg.get("content", "")
+            if len(content) > MAX_SYSTEM_CHARS:
+                log.info(
+                    "Compacting system message: %d chars -> %d chars",
+                    len(content),
+                    len(COMPACT_SYSTEM_PROMPT),
+                )
+                result.append({"role": "system", "content": COMPACT_SYSTEM_PROMPT})
+            else:
+                result.append(msg)
+        else:
+            result.append(msg)
+    return result
+
+
+# ---------- HTTP ハンドラ ----------
+
 class ProxyHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
-        if self.path == "/api/tags":
-            self._handle_tags()
-        else:
-            try:
-                body = _curl_get(f"{HAILO_URL}{self.path}")
-                self._send_json(200, body.encode())
-            except Exception as e:
-                log.error("GET error: %s", e)
-                self._send_error(502, str(e))
+        """GET はそのまま Ollama に転送"""
+        try:
+            body = _curl_get(f"{OLLAMA_URL}{self.path}")
+            self._send_json(200, body.encode())
+        except Exception as e:
+            log.error("GET error: %s", e)
+            self._send_error(502, str(e))
 
     def do_POST(self):
         content_length = int(self.headers.get("Content-Length", 0))
@@ -81,7 +107,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         else:
             try:
                 data = json.loads(body) if body else {}
-                resp = _curl_post(f"{HAILO_URL}{self.path}", data)
+                resp = _curl_post(f"{OLLAMA_URL}{self.path}", data)
                 self._send_json(200, resp.encode())
             except Exception as e:
                 log.error("POST error: %s", e)
@@ -91,57 +117,58 @@ class ProxyHandler(BaseHTTPRequestHandler):
         try:
             data = json.loads(body)
             was_streaming = data.get("stream", True)
-            log.info("Original fields: %s, stream=%s", list(data.keys()), was_streaming)
+            log.info(
+                "Request: model=%s, fields=%s, stream=%s",
+                data.get("model"), list(data.keys()), was_streaming,
+            )
 
-            # フィルタ: 許可フィールドのみ + stream=false 固定
-            filtered = {k: v for k, v in data.items() if k in ALLOWED_CHAT_FIELDS}
-            if "messages" in filtered:
-                filtered["messages"] = [
-                    {k: v for k, v in msg.items() if k in ALLOWED_MESSAGE_FIELDS}
-                    for msg in filtered["messages"]
-                    if msg.get("role") in ("system", "user", "assistant")
-                ]
-                # system メッセージをコンパクトに (1.5B モデルのコンテキスト制限対策)
-                filtered["messages"] = self._compact_messages(filtered["messages"])
-            filtered["stream"] = False
+            # システムプロンプトを圧縮
+            if "messages" in data:
+                data["messages"] = _compact_messages(data["messages"])
 
-            msg_count = len(filtered.get("messages", []))
-            log.info("Sending to hailo: model=%s, messages=%d, stream=false", filtered.get("model"), msg_count)
+            # stream=false で Ollama に送信 (レスポンス変換を簡単にするため)
+            data["stream"] = False
 
-            # curl で hailo-ollama に送信
-            resp_text = _curl_post(f"{HAILO_URL}/api/chat", filtered)
-            log.info("Raw response length: %d, body: %s", len(resp_text), resp_text[:200])
+            msg_count = len(data.get("messages", []))
+            log.info(
+                "Forwarding to Ollama: model=%s, messages=%d",
+                data.get("model"), msg_count,
+            )
+
+            resp_text = _curl_post(f"{OLLAMA_URL}/api/chat", data)
+            log.info("Response length: %d", len(resp_text))
 
             if not resp_text.strip():
-                log.error("Empty response from hailo-ollama")
-                self._send_error(502, "Empty response from hailo-ollama")
+                log.error("Empty response from Ollama")
+                self._send_error(502, "Empty response from Ollama")
                 return
 
-            # レスポンスをパース（NDJSON の場合もあるので最後の done=true を探す）
-            hailo_resp = None
+            # レスポンスをパース (NDJSON の場合もあるので最後の done=true を探す)
+            ollama_resp = None
             for line in reversed(resp_text.strip().split("\n")):
                 line = line.strip()
                 if not line:
                     continue
                 try:
                     parsed = json.loads(line)
-                    if hailo_resp is None or parsed.get("done"):
-                        hailo_resp = parsed
+                    if ollama_resp is None or parsed.get("done"):
+                        ollama_resp = parsed
                     if parsed.get("done"):
                         break
                 except json.JSONDecodeError:
                     continue
 
-            if not hailo_resp:
+            if not ollama_resp:
                 log.error("No valid JSON: %s", resp_text[:300])
-                self._send_error(502, "Invalid response from hailo-ollama")
+                self._send_error(502, "Invalid response from Ollama")
                 return
 
-            content = hailo_resp.get("message", {}).get("content", "")
-            model = hailo_resp.get("model", "unknown")
-            log.info("Response: %d chars, model=%s", len(content), model)
+            content = ollama_resp.get("message", {}).get("content", "")
+            model = ollama_resp.get("model", "unknown")
+            log.info("Content: %d chars, model=%s", len(content), model)
 
             if was_streaming:
+                # OpenClaw は streaming を期待するので NDJSON 形式で返す
                 now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
                 content_chunk = json.dumps({
@@ -156,8 +183,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     "message": {"role": "assistant", "content": ""},
                     "done": True,
                     "done_reason": "stop",
-                    "total_duration": hailo_resp.get("total_duration", 0),
-                    "eval_count": hailo_resp.get("eval_count", 0),
+                    "total_duration": ollama_resp.get("total_duration", 0),
+                    "eval_count": ollama_resp.get("eval_count", 0),
                 })
 
                 self.send_response(200)
@@ -167,60 +194,10 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 self.wfile.write((done_chunk + "\n").encode())
                 self.wfile.flush()
             else:
-                self._send_json(200, json.dumps(hailo_resp).encode())
+                self._send_json(200, json.dumps(ollama_resp).encode())
 
         except Exception as e:
             log.error("Chat error: %s", e, exc_info=True)
-            self._send_error(502, str(e))
-
-    # システムプロンプトの最大文字数 (1.5B モデル向け)
-    MAX_SYSTEM_CHARS = 500
-
-    COMPACT_SYSTEM_PROMPT = (
-        "あなたはAI秘書「ずんだもん」です。"
-        "日本語で簡潔に応答してください。"
-        "ユーザーの質問や依頼に親切に答えてください。"
-        "語尾は「なのだ」を使ってください。"
-    )
-
-    def _compact_messages(self, messages: list) -> list:
-        """system メッセージが長すぎる場合、コンパクトなプロンプトに置換"""
-        result = []
-        for msg in messages:
-            if msg.get("role") == "system":
-                content = msg.get("content", "")
-                if len(content) > self.MAX_SYSTEM_CHARS:
-                    log.info(
-                        "Compacting system message: %d chars → %d chars",
-                        len(content),
-                        len(self.COMPACT_SYSTEM_PROMPT),
-                    )
-                    result.append({"role": "system", "content": self.COMPACT_SYSTEM_PROMPT})
-                else:
-                    result.append(msg)
-            else:
-                result.append(msg)
-        return result
-
-    def _handle_tags(self):
-        try:
-            body = _curl_get(f"{HAILO_URL}/hailo/v1/list")
-            data = json.loads(body)
-            models = data.get("models", [])
-            tags_response = {
-                "models": [
-                    {
-                        "name": m,
-                        "model": m,
-                        "modified_at": "2026-01-01T00:00:00Z",
-                        "size": 0,
-                    }
-                    for m in models
-                ]
-            }
-            self._send_json(200, json.dumps(tags_response).encode())
-        except Exception as e:
-            log.error("Tags error: %s", e)
             self._send_error(502, str(e))
 
     def _send_json(self, code: int, body: bytes):
@@ -241,7 +218,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
 def main():
     server = HTTPServer(("127.0.0.1", LISTEN_PORT), ProxyHandler)
-    log.info("hailo-proxy listening on 127.0.0.1:%d → %s", LISTEN_PORT, HAILO_URL)
+    log.info("ollama-proxy on 127.0.0.1:%d -> %s", LISTEN_PORT, OLLAMA_URL)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

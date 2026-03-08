@@ -1,6 +1,6 @@
 [Unit]
-Description=hailo-proxy — OpenClaw ↔ hailo-ollama 互換プロキシ
-After=network.target
+Description=ollama-proxy — OpenClaw システムプロンプト圧縮プロキシ
+After=network.target ollama.service
 Wants=openclaw.service
 
 [Service]

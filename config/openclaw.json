@@ -16,7 +16,7 @@
     "providers": {
       "ollama": {
         "_comment": "ローカル LLM (コスト 0・プライベート・オフライン可)",
-        "baseUrl": "http://127.0.0.1:11434",
+        "baseUrl": "http://127.0.0.1:11435",
         "apiKey": "ollama-local",
         "api": "ollama"
       },
