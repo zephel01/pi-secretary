@@ -99,8 +99,49 @@ WAKE_WORD = os.getenv("WAKE_WORD", "ずんだもん")
 STT_MODEL_SIZE = os.getenv("STT_MODEL_SIZE", "base")
 STT_LANGUAGE = os.getenv("STT_LANGUAGE", "ja")
 VOICEVOX_URL = os.getenv("VOICEVOX_URL", "http://127.0.0.1:50021")
-VOICEVOX_SPEAKER_ID = int(os.getenv("VOICEVOX_SPEAKER_ID", "3"))
+CHARACTER = os.getenv("CHARACTER", "zundamon")
 USE_WAKE_WORD = bool(WAKE_WORD.strip())
+
+# --- CHARACTER → VOICEVOX スピーカーID マッピング ---
+# VOICEVOX_SPEAKER_ID が明示的に設定されていればそれを使う。
+# 未設定なら CHARACTER から自動判定。
+CHARACTER_SPEAKER_MAP = {
+    "zundamon": 3,   # ずんだもん ノーマル
+    "metan": 2,      # 四国めたん ノーマル
+    "tsumugi": 8,    # 春日部つむぎ ノーマル
+    "normal": 3,     # デフォルト
+}
+
+_speaker_env = os.getenv("VOICEVOX_SPEAKER_ID", "")
+if _speaker_env:
+    VOICEVOX_SPEAKER_ID = int(_speaker_env)
+else:
+    VOICEVOX_SPEAKER_ID = CHARACTER_SPEAKER_MAP.get(CHARACTER, 3)
+
+# --- キャラクター別の固定メッセージ ---
+CHARACTER_MESSAGES = {
+    "zundamon": {
+        "startup": "起動したのだ。なんでも聞くのだ。",
+        "ready": "はいなのだ。なんでも聞くのだ。",
+        "error": "すみません、エラーが発生したのだ。",
+    },
+    "metan": {
+        "startup": "起動しましたわ。何でもお聞きになって。",
+        "ready": "はい、何でしょう？",
+        "error": "申し訳ありません、エラーが発生しましたわ。",
+    },
+    "tsumugi": {
+        "startup": "起動したよ〜！なんでも聞いてね！",
+        "ready": "はーい！なんでも聞いてよ〜！",
+        "error": "ごめん、エラーが出ちゃった〜。",
+    },
+    "normal": {
+        "startup": "起動しました。ご用件をどうぞ。",
+        "ready": "はい、何でしょうか。",
+        "error": "すみません、エラーが発生しました。",
+    },
+}
+_char_msgs = CHARACTER_MESSAGES.get(CHARACTER, CHARACTER_MESSAGES["normal"])
 
 
 class VoiceBridgeHeadless:
@@ -303,6 +344,7 @@ class VoiceBridgeHeadless:
         logger.info("voice-bridge ヘッドレスモード起動")
         logger.info(f"  ウェイクワード: {'「' + WAKE_WORD + '」' if USE_WAKE_WORD else '無効（常時リスニング）'}")
         logger.info(f"  STT: faster-whisper ({STT_MODEL_SIZE})")
+        logger.info(f"  キャラクター: {CHARACTER} (speaker_id={VOICEVOX_SPEAKER_ID})")
         logger.info(f"  TTS: {'VOICEVOX' if VoicevoxTTS and isinstance(self.tts, VoicevoxTTS) else 'Edge TTS'}")
         logger.info("=" * 50)
 
@@ -310,7 +352,7 @@ class VoiceBridgeHeadless:
         self.mic.start_stream()
 
         # 起動音声
-        self._speak("起動したのだ。なんでも聞くのだ。")
+        self._speak(_char_msgs["startup"])
 
         try:
             while self._running:
@@ -360,7 +402,7 @@ class VoiceBridgeHeadless:
 
         # コマンドテキストが空ならプロンプト
         if not command_text:
-            self._speak("はいなのだ。なんでも聞くのだ。")
+            self._speak(_char_msgs["ready"])
             # 次の発話を待つ
             if self.mic.wait_for_speech(timeout=5.0):
                 audio2 = self.mic.record_utterance()
@@ -380,7 +422,7 @@ class VoiceBridgeHeadless:
             logger.info(f"応答: {reply}")
         except Exception as e:
             logger.error(f"Chat エラー: {e}")
-            reply = "すみません、エラーが発生したのだ。"
+            reply = _char_msgs["error"]
 
         # TTS 再生
         self._speak(reply)

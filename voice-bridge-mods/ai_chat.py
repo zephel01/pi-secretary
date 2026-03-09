@@ -299,7 +299,7 @@ class AiChat:
                 reply = self._chat_requests(messages)
         except Exception as e:
             logger.error(f"Chat API エラー: {e}")
-            reply = "すみません、通信エラーなのだ。もう一度言ってほしいのだ。"
+            reply = "すみません、通信エラーが発生しました。もう一度お願いします。"
 
         self.history.append({"role": "assistant", "content": reply})
         self._trim_history()
@@ -372,7 +372,7 @@ class AiChat:
 
         except Exception as e:
             logger.error(f"Stream API エラー: {e}")
-            full_reply = "すみません、通信エラーなのだ。"
+            full_reply = "すみません、通信エラーが発生しました。"
             yield full_reply
 
         self.history.append({"role": "assistant", "content": full_reply})
