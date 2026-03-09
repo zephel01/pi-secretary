@@ -205,13 +205,21 @@ class HailoWhisperDecoder:
 
             self.configured.run([bindings], 10000)
 
-            # Concatenate outputs
+            # Concatenate outputs along last axis
             outputs = [output_bufs[name] for name in sorted(output_bufs.keys())]
-            combined = np.concatenate(outputs, axis=3)
-            combined = np.squeeze(combined, axis=0)
+            if i == 0:
+                print(f"[Decoder] Output shapes: {[o.shape for o in outputs]}")
+            combined = np.concatenate(outputs, axis=-1)
+            if i == 0:
+                print(f"[Decoder] Combined shape: {combined.shape}")
 
-            # Get next token
-            logits = combined[:, i].copy().squeeze()
+            # Get next token - shape is (seq, 1, vocab) or (seq, vocab)
+            if combined.ndim == 3:
+                logits = combined[i, :, :].flatten()
+            elif combined.ndim == 2:
+                logits = combined[i, :]
+            else:
+                logits = combined[:, :, :, i].flatten()
             for token in set(generated_tokens[-8:]):
                 if token not in [11, 13]:
                     logits[token] /= 1.5
