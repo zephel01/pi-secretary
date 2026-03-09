@@ -71,7 +71,7 @@ except ImportError:
 
 # --- 設定 ---
 WAKE_WORD = os.getenv("WAKE_WORD", "ずんだもん")
-STT_MODEL_SIZE = os.getenv("STT_MODEL_SIZE", "small")
+STT_MODEL_SIZE = os.getenv("STT_MODEL_SIZE", "base")
 STT_LANGUAGE = os.getenv("STT_LANGUAGE", "ja")
 VOICEVOX_URL = os.getenv("VOICEVOX_URL", "http://127.0.0.1:50021")
 VOICEVOX_SPEAKER_ID = int(os.getenv("VOICEVOX_SPEAKER_ID", "3"))
