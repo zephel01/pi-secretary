@@ -103,11 +103,23 @@ except ImportError:
 WAKE_WORD = os.getenv("WAKE_WORD", "ずんだもん")
 STT_MODEL_SIZE = os.getenv("STT_MODEL_SIZE", "base")
 STT_LANGUAGE = os.getenv("STT_LANGUAGE", "ja")
-TTS_ENGINE_TYPE = os.getenv("TTS_ENGINE", "voicevox").lower()  # voicevox / coeiroink
-VOICEVOX_URL = os.getenv("VOICEVOX_URL", "http://127.0.0.1:50021")
-COEIROINK_URL = os.getenv("COEIROINK_URL", "http://127.0.0.1:50032")
 CHARACTER = os.getenv("CHARACTER", "zundamon")
+VOICEVOX_URL = os.getenv("VOICEVOX_URL", "http://127.0.0.1:50021")
+COEIROINK_URL = os.getenv("COEIROINK_URL", "http://192.168.4.85:50033")
 USE_WAKE_WORD = bool(WAKE_WORD.strip())
+
+# --- CHARACTER → TTS エンジン自動判定 ---
+# COEIROINK 専用キャラは TTS_ENGINE を明示しなくても自動で coeiroink になる
+COEIROINK_CHARACTERS = {"lilin"}
+
+_tts_env = os.getenv("TTS_ENGINE", "").lower()
+if _tts_env:
+    TTS_ENGINE_TYPE = _tts_env
+elif CHARACTER in COEIROINK_CHARACTERS:
+    TTS_ENGINE_TYPE = "coeiroink"
+    logger.info(f"CHARACTER={CHARACTER} → TTS_ENGINE を自動で coeiroink に設定")
+else:
+    TTS_ENGINE_TYPE = "voicevox"
 
 # --- CHARACTER → VOICEVOX スピーカーID マッピング ---
 # VOICEVOX_SPEAKER_ID が明示的に設定されていればそれを使う。
@@ -406,8 +418,13 @@ class VoiceBridgeHeadless:
         logger.info("voice-bridge ヘッドレスモード起動")
         logger.info(f"  ウェイクワード: {'「' + WAKE_WORD + '」' if USE_WAKE_WORD else '無効（常時リスニング）'}")
         logger.info(f"  STT: faster-whisper ({STT_MODEL_SIZE})")
-        logger.info(f"  キャラクター: {CHARACTER} (speaker_id={VOICEVOX_SPEAKER_ID})")
-        logger.info(f"  TTS: {'VOICEVOX' if VoicevoxTTS and isinstance(self.tts, VoicevoxTTS) else 'Edge TTS'}")
+        logger.info(f"  キャラクター: {CHARACTER}")
+        if CoeiroinkTTS and isinstance(self.tts, CoeiroinkTTS):
+            logger.info(f"  TTS: COEIROINK ({COEIROINK_URL})")
+        elif VoicevoxTTS and isinstance(self.tts, VoicevoxTTS):
+            logger.info(f"  TTS: VOICEVOX (speaker_id={VOICEVOX_SPEAKER_ID})")
+        else:
+            logger.info(f"  TTS: Edge TTS (フォールバック)")
         logger.info("=" * 50)
 
         self._running = True
