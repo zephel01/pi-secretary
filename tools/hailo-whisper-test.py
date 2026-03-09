@@ -173,16 +173,24 @@ class HailoWhisperDecoder:
         nhwc = np.transpose(nchw, [0, 2, 3, 1])               # (1, seq, 1, dim)
         return nhwc
 
-    def decode(self, encoded_features: np.ndarray) -> str:
+    def decode(self, encoded_features: np.ndarray, language: str = "ja") -> str:
         if len(encoded_features.shape) == 3:
             encoded_features = np.expand_dims(encoded_features, axis=0)
 
-        # Start token
+        # Prompt tokens: <|startoftranscript|><|lang|><|transcribe|><|notimestamps|>
+        LANG_TOKENS = {
+            "en": 50259, "zh": 50260, "de": 50261, "es": 50262,
+            "ru": 50263, "ko": 50264, "fr": 50265, "ja": 50266,
+        }
         decoder_input_ids = np.zeros((1, self.seq_length), dtype=np.int64)
-        decoder_input_ids[0][0] = 50258  # <|startoftranscript|>
+        decoder_input_ids[0][0] = 50258   # <|startoftranscript|>
+        decoder_input_ids[0][1] = LANG_TOKENS.get(language, 50266)  # <|lang|>
+        decoder_input_ids[0][2] = 50359   # <|transcribe|>
+        decoder_input_ids[0][3] = 50363   # <|notimestamps|>
+        prompt_len = 4
         generated_tokens = []
 
-        for i in range(self.seq_length - 1):
+        for i in range(prompt_len - 1, self.seq_length - 1):
             tokenized = self.tokenization(decoder_input_ids)
 
             bindings = self.configured.create_bindings()
@@ -222,7 +230,8 @@ class HailoWhisperDecoder:
             next_token = int(np.argmax(logits))
 
             generated_tokens.append(next_token)
-            decoder_input_ids[0][i + 1] = next_token
+            if i + 1 < self.seq_length:
+                decoder_input_ids[0][i + 1] = next_token
 
             if next_token == self.tokenizer.eos_token_id:
                 break
@@ -235,6 +244,7 @@ def main():
     parser = argparse.ArgumentParser(description="Hailo-10H Whisper STT Test")
     parser.add_argument("--audio", required=True, help="Path to audio file")
     parser.add_argument("--variant", default="tiny", choices=["tiny", "base"])
+    parser.add_argument("--lang", default="ja", help="Language code (ja, en, zh, ko, etc.)")
     args = parser.parse_args()
 
     if args.variant == "tiny":
@@ -281,7 +291,7 @@ def main():
         t_enc = time.time() - t4
 
         t5 = time.time()
-        text = decoder.decode(encoded)
+        text = decoder.decode(encoded, language=args.lang)
         t_dec = time.time() - t5
 
         print(f"Chunk {i+1}: encoder={t_enc:.2f}s, decoder={t_dec:.2f}s, total={t_enc+t_dec:.2f}s")
