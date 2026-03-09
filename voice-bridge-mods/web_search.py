@@ -22,7 +22,10 @@ def search(query: str, max_results: int = 3, region: str = "jp-jp") -> list[dict
         [{"title": "...", "url": "...", "body": "..."}, ...]
     """
     try:
-        from duckduckgo_search import DDGS
+        try:
+            from ddgs import DDGS
+        except ImportError:
+            from duckduckgo_search import DDGS
 
         results = []
         with DDGS() as ddgs:
@@ -36,8 +39,8 @@ def search(query: str, max_results: int = 3, region: str = "jp-jp") -> list[dict
         return results
 
     except ImportError:
-        logger.error("duckduckgo-search がインストールされていません: "
-                      "pip3 install duckduckgo-search --break-system-packages")
+        logger.error("検索ライブラリがインストールされていません: "
+                      "pip3 install ddgs --break-system-packages")
         return []
     except Exception as e:
         logger.error(f"検索エラー: {e}")
