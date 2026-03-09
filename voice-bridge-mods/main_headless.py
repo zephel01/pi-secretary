@@ -259,9 +259,14 @@ class VoiceBridgeHeadless:
                 segments, info = self.stt.transcribe(
                     audio,
                     language=STT_LANGUAGE,
-                    beam_size=3,
+                    beam_size=5,
                     vad_filter=True,
-                    initial_prompt="ずんだもん、今日の天気を教えて。明日の予定は？ニュースを調べて。リマインダーを設定して。",
+                    initial_prompt=(
+                        "ずんだもん、今日の天気を教えて。明日の予定は？ニュースを調べて。"
+                        "リマインダーを設定して。日本の首都はどこ？東京の人口は？"
+                        "検索して。翻訳して。計算して。何時？いくら？"
+                        "プログラミング、人工知能、機械学習、ラズベリーパイ。"
+                    ),
                 )
                 texts = [seg.text for seg in segments]
                 return " ".join(texts).strip()
