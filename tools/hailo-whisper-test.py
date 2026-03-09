@@ -115,7 +115,7 @@ class HailoWhisperEncoder:
         )
         bindings.output().set_buffer(output_buf)
 
-        self.configured.run([bindings])
+        self.configured.run([bindings], 10000)
         return output_buf
 
 
@@ -203,7 +203,7 @@ class HailoWhisperDecoder:
                 bindings.output(name).set_buffer(buf)
                 output_bufs[name] = buf
 
-            self.configured.run([bindings])
+            self.configured.run([bindings], 10000)
 
             # Concatenate outputs
             outputs = [output_bufs[name] for name in sorted(output_bufs.keys())]
