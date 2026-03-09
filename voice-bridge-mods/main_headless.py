@@ -268,16 +268,35 @@ class VoiceBridgeHeadless:
 
         return ""
 
+    @staticmethod
+    def _clean_text_for_tts(text: str) -> str:
+        """TTS に渡す前にテキストを前処理する"""
+        import re
+        # URL を除去
+        text = re.sub(r'https?://\S+', '', text)
+        # 残った括弧内の空白やゴミを整理
+        text = re.sub(r'[「」【】\[\]()（）]', '', text)
+        # 連続空白・改行を整理
+        text = re.sub(r'\s+', ' ', text).strip()
+        # 空になったら None 的扱い
+        return text
+
     def _speak(self, text: str):
         """テキスト → 音声再生"""
         if not text or not self.tts:
+            return
+
+        # TTS 用にテキストをクリーンアップ
+        clean = self._clean_text_for_tts(text)
+        if not clean:
+            logger.warning(f"TTS テキストが空になりました (元: {text[:50]}...)")
             return
 
         self._is_playing = True
         try:
             # VOICEVOX
             if VoicevoxTTS and isinstance(self.tts, VoicevoxTTS):
-                wav_path = self.tts.synthesize(text)
+                wav_path = self.tts.synthesize(clean)
                 if wav_path and os.path.isfile(wav_path):
                     play_wav(wav_path)
                     try:
@@ -288,7 +307,7 @@ class VoiceBridgeHeadless:
 
             # Edge TTS
             if EdgeTTSEngine and isinstance(self.tts, EdgeTTSEngine):
-                wav_path = self.tts.synthesize(text)
+                wav_path = self.tts.synthesize(clean)
                 if wav_path and os.path.isfile(wav_path):
                     play_wav(wav_path)
                     try:
