@@ -94,9 +94,9 @@ def preprocess_audio_v2(audio: np.ndarray, chunk_length: int = 10):
 
 # ── Hailo NPU Inference (v5.x InferModel API) ──────────
 class HailoWhisperEncoder:
-    def __init__(self, hef_path: str):
+    def __init__(self, hef_path: str, vdevice=None):
         from hailo_platform import VDevice, FormatType
-        self.vdevice = VDevice()
+        self.vdevice = vdevice or VDevice()
         self.model = self.vdevice.create_infer_model(hef_path)
         self.model.input().set_format_type(FormatType.FLOAT32)
         self.model.output().set_format_type(FormatType.FLOAT32)
@@ -120,11 +120,11 @@ class HailoWhisperEncoder:
 
 
 class HailoWhisperDecoder:
-    def __init__(self, hef_path: str, variant: str = "tiny"):
+    def __init__(self, hef_path: str, variant: str = "tiny", vdevice=None):
         from hailo_platform import VDevice, FormatType
         from transformers import AutoTokenizer
 
-        self.vdevice = VDevice()
+        self.vdevice = vdevice or VDevice()
         self.model = self.vdevice.create_infer_model(hef_path)
         self.variant = variant
 
@@ -258,13 +258,18 @@ def main():
     mels = preprocess_audio_v2(audio, chunk_length=chunk_length)
     print(f"Mel spectrogram: {len(mels)} chunk(s) ({time.time()-t1:.2f}s)")
 
+    from hailo_platform import VDevice
     t2 = time.time()
-    encoder = HailoWhisperEncoder(encoder_hef)
-    print(f"Encoder loaded ({time.time()-t2:.2f}s)")
+    vdevice = VDevice()
+    print(f"VDevice created ({time.time()-t2:.2f}s)")
 
     t3 = time.time()
-    decoder = HailoWhisperDecoder(decoder_hef, variant=args.variant)
-    print(f"Decoder loaded ({time.time()-t3:.2f}s)\n")
+    encoder = HailoWhisperEncoder(encoder_hef, vdevice=vdevice)
+    print(f"Encoder loaded ({time.time()-t3:.2f}s)")
+
+    t4_load = time.time()
+    decoder = HailoWhisperDecoder(decoder_hef, variant=args.variant, vdevice=vdevice)
+    print(f"Decoder loaded ({time.time()-t4_load:.2f}s)\n")
 
     for i, mel in enumerate(mels):
         t4 = time.time()
