@@ -113,11 +113,13 @@ USE_WAKE_WORD = bool(WAKE_WORD.strip())
 COEIROINK_CHARACTERS = {"lilin"}
 
 _tts_env = os.getenv("TTS_ENGINE", "").lower()
-if _tts_env:
-    TTS_ENGINE_TYPE = _tts_env
-elif CHARACTER in COEIROINK_CHARACTERS:
+if CHARACTER in COEIROINK_CHARACTERS:
+    # COEIROINK 専用キャラは TTS_ENGINE の設定に関わらず強制的に coeiroink
     TTS_ENGINE_TYPE = "coeiroink"
-    logger.info(f"CHARACTER={CHARACTER} → TTS_ENGINE を自動で coeiroink に設定")
+    if _tts_env and _tts_env != "coeiroink":
+        logger.info(f"CHARACTER={CHARACTER} は COEIROINK 専用 → TTS_ENGINE={_tts_env} を無視して coeiroink に設定")
+elif _tts_env:
+    TTS_ENGINE_TYPE = _tts_env
 else:
     TTS_ENGINE_TYPE = "voicevox"
 
