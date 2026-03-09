@@ -1,11 +1,26 @@
 """
-ai_chat.py — OpenAI互換 Chat クライアント
+ai_chat.py — マルチ LLM Chat クライアント + ウェブ検索
 
-translator.py の置き換え。
-Google翻訳の代わりに OpenClaw Gateway の /v1/chat/completions を叩く。
+対応バックエンド:
+  - OpenAI API (GPT-4o, etc.)
+  - OpenClaw Gateway (ローカル LLM)
+  - Google Gemini API
+  - その他 OpenAI 互換 API (GLM, Groq, Together, etc.)
 
-voice-bridge の既存構造に合わせて、
-translate() と同じインターフェースで使えるようにする。
+ウェブ検索:
+  - DuckDuckGo (APIキー不要) を使って検索が必要な質問に自動対応
+  - LLM が検索の必要性を判断 → 検索実行 → 結果をコンテキストとして渡す
+
+環境変数:
+  OPENAI_API_BASE   — API エンドポイント (default: http://127.0.0.1:18789/v1)
+  OPENAI_API_KEY    — API キー
+  OPENAI_MODEL      — モデル名
+  LLM_BACKEND       — バックエンド種別: openai / gemini / openclaw (default: openai)
+  GEMINI_API_KEY    — Gemini API キー (LLM_BACKEND=gemini 時)
+  GEMINI_MODEL      — Gemini モデル名 (default: gemini-2.0-flash)
+  WEB_SEARCH        — 検索機能: on / off (default: on)
+  CHAT_MAX_HISTORY  — 会話履歴の最大数 (default: 20)
+  CHAT_TIMEOUT      — API タイムアウト秒数 (default: 30)
 """
 
 import os
@@ -20,16 +35,25 @@ logger = logging.getLogger(__name__)
 API_BASE = os.getenv("OPENAI_API_BASE", "http://127.0.0.1:18789/v1")
 API_KEY = os.getenv("OPENAI_API_KEY", "")
 MODEL = os.getenv("OPENAI_MODEL", "openclaw")
+LLM_BACKEND = os.getenv("LLM_BACKEND", "openai")  # openai / gemini / openclaw
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+WEB_SEARCH = os.getenv("WEB_SEARCH", "on").lower() in ("on", "true", "1", "yes")
 MAX_HISTORY = int(os.getenv("CHAT_MAX_HISTORY", "20"))
 TIMEOUT = int(os.getenv("CHAT_TIMEOUT", "30"))
+
+# 検索判定用キーワード (高速フィルタ, LLM 判定前に使用)
+SEARCH_HINT_KEYWORDS = [
+    "検索", "調べて", "ググ", "最新", "ニュース", "天気", "今日",
+    "現在", "いつ", "何時", "価格", "値段", "株価", "為替",
+    "スコア", "結果", "誰が", "どこで", "何が",
+    "search", "latest", "news", "weather", "price", "current",
+]
 
 
 class AiChat:
     """
-    OpenAI互換APIを使った会話クライアント。
-
-    translator.py の Translator クラスと同じ立ち位置。
-    voice-bridge の main.py から呼ばれる。
+    マルチバックエンド AI Chat クライアント + ウェブ検索。
     """
 
     def __init__(
@@ -38,11 +62,18 @@ class AiChat:
         api_key: str = None,
         model: str = None,
         system_prompt: str = None,
+        backend: str = None,
     ):
+        self.backend = backend or LLM_BACKEND
         self.base_url = (base_url or API_BASE).rstrip("/")
         self.api_key = api_key or API_KEY
         self.model = model or MODEL
         self.history: list[dict] = []
+        self.web_search_enabled = WEB_SEARCH
+
+        # Gemini 設定
+        self.gemini_api_key = GEMINI_API_KEY
+        self.gemini_model = GEMINI_MODEL
 
         # システムプロンプト
         if system_prompt is None:
@@ -62,37 +93,132 @@ class AiChat:
                 )
                 logger.warning(f"プロンプトファイルなし、デフォルトを使用: {prompt_file}")
 
+        # 検索対応のシステムプロンプト拡張
+        if self.web_search_enabled:
+            system_prompt += (
+                "\n\nあなたはインターネット検索の結果を参照できます。"
+                "検索結果が提供された場合は、その情報を元に正確に回答してください。"
+                "情報の出典が明確な場合は簡潔に言及してください。"
+            )
+
+        self.system_prompt_text = system_prompt
         self.system_message = {"role": "system", "content": system_prompt}
 
-        # openai ライブラリを使う (なければ requests にフォールバック)
+        # クライアント初期化
+        self._init_client()
+
+    def _init_client(self):
+        """バックエンドに応じたクライアントを初期化"""
+        self._use_openai_lib = False
+        self._use_gemini = False
+
+        if self.backend == "gemini":
+            self._init_gemini()
+        else:
+            # openai / openclaw / その他 OpenAI 互換
+            self._init_openai()
+
+    def _init_openai(self):
+        """OpenAI 互換クライアント初期化"""
         try:
             from openai import OpenAI
-
-            self.client = OpenAI(base_url=self.base_url, api_key=self.api_key)
+            self.client = OpenAI(
+                base_url=self.base_url,
+                api_key=self.api_key,
+                timeout=TIMEOUT,
+            )
             self._use_openai_lib = True
-            logger.info(f"openai ライブラリで接続: {self.base_url}")
+            logger.info(f"OpenAI 互換クライアント: {self.base_url} (model={self.model})")
         except ImportError:
             import requests as _req
-
             self._requests = _req
             self._use_openai_lib = False
             logger.info(f"requests で直接接続: {self.base_url}")
 
+    def _init_gemini(self):
+        """Google Gemini クライアント初期化"""
+        try:
+            import google.generativeai as genai
+            genai.configure(api_key=self.gemini_api_key)
+            self._gemini_model = genai.GenerativeModel(
+                self.gemini_model,
+                system_instruction=self.system_prompt_text,
+            )
+            self._gemini_chat = self._gemini_model.start_chat(history=[])
+            self._use_gemini = True
+            logger.info(f"Gemini クライアント: {self.gemini_model}")
+        except ImportError:
+            logger.error("google-generativeai がインストールされていません: "
+                          "pip3 install google-generativeai --break-system-packages")
+            # フォールバック: OpenAI 互換に切り替え
+            logger.info("OpenAI 互換にフォールバック")
+            self.backend = "openai"
+            self._init_openai()
+
+    # --- 検索判定 ---
+
+    def _needs_search(self, text: str) -> bool:
+        """ユーザーの質問がウェブ検索を必要とするか簡易判定"""
+        if not self.web_search_enabled:
+            return False
+        text_lower = text.lower()
+        return any(kw in text_lower for kw in SEARCH_HINT_KEYWORDS)
+
+    def _extract_search_query(self, user_text: str) -> str:
+        """ユーザー発話から検索クエリを抽出 (簡易版)"""
+        # 不要な接頭辞を除去
+        remove_prefixes = [
+            "検索して", "調べて", "ググって", "教えて",
+            "について調べて", "について教えて", "について検索して",
+        ]
+        query = user_text
+        for prefix in remove_prefixes:
+            query = query.replace(prefix, "")
+        return query.strip() or user_text
+
+    def _search_web(self, query: str) -> str:
+        """DuckDuckGo でウェブ検索"""
+        try:
+            from web_search import search_and_format
+            return search_and_format(query, max_results=3)
+        except ImportError:
+            logger.warning("web_search.py が見つかりません")
+            return ""
+
+    # --- メインの chat ---
+
     def chat(self, user_text: str) -> str:
-        """
-        テキストを送って応答を得る。
-        translator.py の translate() と同じ立ち位置。
-        """
+        """テキストを送って応答を得る。検索が必要なら自動で検索する。"""
         if not user_text.strip():
             return ""
 
-        self.history.append({"role": "user", "content": user_text})
+        # 検索判定 & 実行
+        search_context = ""
+        if self._needs_search(user_text):
+            query = self._extract_search_query(user_text)
+            logger.info(f"検索実行: {query}")
+            search_context = self._search_web(query)
+            if search_context:
+                logger.info(f"検索結果取得済み ({len(search_context)} chars)")
+
+        # メッセージ構築
+        if search_context:
+            augmented_text = (
+                f"{user_text}\n\n"
+                f"【参考: ウェブ検索結果】\n{search_context}"
+            )
+        else:
+            augmented_text = user_text
+
+        self.history.append({"role": "user", "content": augmented_text})
         self._trim_history()
 
         messages = [self.system_message] + self.history
 
         try:
-            if self._use_openai_lib:
+            if self._use_gemini:
+                reply = self._chat_gemini(augmented_text)
+            elif self._use_openai_lib:
                 reply = self._chat_openai(messages)
             else:
                 reply = self._chat_requests(messages)
@@ -106,21 +232,38 @@ class AiChat:
         return reply
 
     def chat_stream(self, user_text: str) -> Generator[str, None, None]:
-        """
-        ストリーミング応答。
-        音声合成の低遅延化のため、文単位で yield する。
-        """
+        """ストリーミング応答。文単位で yield する。"""
         if not user_text.strip():
             return
 
-        self.history.append({"role": "user", "content": user_text})
+        # 検索判定 & 実行
+        search_context = ""
+        if self._needs_search(user_text):
+            query = self._extract_search_query(user_text)
+            logger.info(f"検索実行: {query}")
+            search_context = self._search_web(query)
+
+        if search_context:
+            augmented_text = (
+                f"{user_text}\n\n"
+                f"【参考: ウェブ検索結果】\n{search_context}"
+            )
+        else:
+            augmented_text = user_text
+
+        self.history.append({"role": "user", "content": augmented_text})
         self._trim_history()
 
         messages = [self.system_message] + self.history
         full_reply = ""
 
         try:
-            if self._use_openai_lib:
+            if self._use_gemini:
+                # Gemini ストリーミング
+                reply = self._chat_gemini(augmented_text)
+                full_reply = reply
+                yield reply
+            elif self._use_openai_lib:
                 stream = self.client.chat.completions.create(
                     model=self.model,
                     messages=messages,
@@ -135,7 +278,6 @@ class AiChat:
                         buffer += delta.content
                         full_reply += delta.content
 
-                        # 文末で区切って yield
                         while any(sep in buffer for sep in ["。", "！", "？", "\n"]):
                             for sep in ["。", "！", "？", "\n"]:
                                 idx = buffer.find(sep)
@@ -146,11 +288,9 @@ class AiChat:
                                         yield sentence
                                     break
 
-                # バッファに残りがあれば
                 if buffer.strip():
                     yield buffer.strip()
             else:
-                # requests フォールバック (ストリーミング非対応)
                 reply = self._chat_requests(messages)
                 full_reply = reply
                 yield reply
@@ -163,20 +303,15 @@ class AiChat:
         self.history.append({"role": "assistant", "content": full_reply})
         self._trim_history()
 
-    # --- translator.py 互換インターフェース ---
+    # --- translator.py 互換 ---
 
     def translate(self, text: str, _src: str = None, _tgt: str = None) -> str:
-        """
-        translator.py の translate() と同じシグネチャ。
-        翻訳ではなく AI 応答を返す。
-        既存の main.py から最小変更で切り替えられるようにする。
-        """
         return self.chat(text)
 
-    # --- 内部メソッド ---
+    # --- バックエンド別メソッド ---
 
     def _chat_openai(self, messages: list[dict]) -> str:
-        """openai ライブラリ経由"""
+        """OpenAI 互換 API"""
         response = self.client.chat.completions.create(
             model=self.model,
             messages=messages,
@@ -184,6 +319,11 @@ class AiChat:
             temperature=0.4,
         )
         return response.choices[0].message.content.strip()
+
+    def _chat_gemini(self, user_text: str) -> str:
+        """Google Gemini API"""
+        response = self._gemini_chat.send_message(user_text)
+        return response.text.strip()
 
     def _chat_requests(self, messages: list[dict]) -> str:
         """requests で直接 HTTP"""
@@ -208,13 +348,15 @@ class AiChat:
         return data["choices"][0]["message"]["content"].strip()
 
     def _trim_history(self):
-        """履歴が長くなりすぎたら古いものを削除"""
         if len(self.history) > MAX_HISTORY * 2:
             self.history = self.history[-MAX_HISTORY * 2 :]
 
     def clear_history(self):
-        """会話履歴をクリア"""
         self.history.clear()
+        if self._use_gemini:
+            # Gemini チャット履歴もリセット
+            import google.generativeai as genai
+            self._gemini_chat = self._gemini_model.start_chat(history=[])
         logger.info("会話履歴をクリアしました")
 
 
@@ -230,8 +372,4 @@ def get_client() -> AiChat:
 
 
 def translate(text: str, src_lang: str = "ja", tgt_lang: str = "ja") -> str:
-    """
-    translator.py の translate() と完全互換。
-    main.py 内の呼び出しを変えずに済む。
-    """
     return get_client().chat(text)
