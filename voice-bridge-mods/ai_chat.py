@@ -165,15 +165,30 @@ class AiChat:
         return any(kw in text_lower for kw in SEARCH_HINT_KEYWORDS)
 
     def _extract_search_query(self, user_text: str) -> str:
-        """ユーザー発話から検索クエリを抽出 (簡易版)"""
-        # 不要な接頭辞を除去
-        remove_prefixes = [
+        """ユーザー発話から検索クエリを抽出"""
+        query = user_text
+
+        # ウェイクワードを除去
+        import re
+        wake = os.getenv("WAKE_WORD", "").strip()
+        if wake:
+            # 「ずんだもん」「ずんだも」等の部分一致も除去
+            query = re.sub(rf"{re.escape(wake)}[、，,\s]*", "", query)
+            # STT が途中で切った場合 (例: 「ずんだも」)
+            if len(wake) >= 3:
+                for i in range(2, len(wake)):
+                    partial = wake[:i]
+                    query = re.sub(rf"^{re.escape(partial)}[、，,\s]*", "", query)
+
+        # 不要な接尾辞を除去
+        remove_words = [
             "検索して", "調べて", "ググって", "教えて",
             "について調べて", "について教えて", "について検索して",
+            "を教えて", "は？", "は。", "って何",
         ]
-        query = user_text
-        for prefix in remove_prefixes:
-            query = query.replace(prefix, "")
+        for word in remove_words:
+            query = query.replace(word, "")
+
         return query.strip() or user_text
 
     def _search_web(self, query: str) -> str:
