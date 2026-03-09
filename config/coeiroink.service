@@ -1,0 +1,14 @@
+[Unit]
+Description=COEIROINK v2 TTS Engine
+After=network.target
+
+[Service]
+Type=simple
+User=zephel01
+WorkingDirectory=/home/zephel01/works/COEIROINK_LINUX_CPU_v.2.12.3
+ExecStart=/home/zephel01/works/COEIROINK_LINUX_CPU_v.2.12.3/engine/engine
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
