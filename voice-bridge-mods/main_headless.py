@@ -238,7 +238,7 @@ class VoiceBridgeHeadless:
 
     def _check_wake_word(self, text: str) -> tuple[bool, str]:
         """
-        ウェイクワード判定。
+        ウェイクワード判定 (STT の誤認識に対応するファジーマッチ)。
 
         Returns:
             (triggered, remaining_text)
@@ -249,13 +249,26 @@ class VoiceBridgeHeadless:
         text_lower = text.lower().strip()
         wake_lower = WAKE_WORD.lower()
 
-        if wake_lower in text_lower:
-            # ウェイクワード以降のテキストを抽出
-            idx = text_lower.index(wake_lower)
-            remaining = text[idx + len(WAKE_WORD) :].strip()
-            # 「、」「，」などの区切りを除去
-            remaining = remaining.lstrip("、，, ")
-            return True, remaining
+        # ウェイクワードの誤認識バリエーション
+        # STT が濁音・半濁音を間違えることがある
+        wake_variants = {wake_lower}
+        if wake_lower == "ずんだもん":
+            wake_variants.update([
+                "すんだもん", "ズンダモン", "ずんだもん",
+                "ずんだも", "すんだも", "zunndamonn",
+            ])
+        # 一般的な濁音⇔清音の揺れを追加
+        replacements = [("ず", "す"), ("だ", "た"), ("ぜ", "せ"), ("ど", "と"), ("ば", "は")]
+        for old, new in replacements:
+            if old in wake_lower:
+                wake_variants.add(wake_lower.replace(old, new))
+
+        for variant in wake_variants:
+            if variant in text_lower:
+                idx = text_lower.index(variant)
+                remaining = text[idx + len(variant) :].strip()
+                remaining = remaining.lstrip("、，, ")
+                return True, remaining
 
         return False, text
 
