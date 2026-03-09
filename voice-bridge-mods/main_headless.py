@@ -195,7 +195,7 @@ class VoiceBridgeHeadless:
                     language=STT_LANGUAGE,
                     beam_size=3,
                     vad_filter=True,
-                    initial_prompt="こんにちは。今日はいい天気ですね。何かお手伝いできることはありますか？",
+                    initial_prompt="ずんだもん、今日の天気を教えて。明日の予定は？ニュースを調べて。リマインダーを設定して。",
                 )
                 texts = [seg.text for seg in segments]
                 return " ".join(texts).strip()
