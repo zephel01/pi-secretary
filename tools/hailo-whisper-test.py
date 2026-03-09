@@ -207,46 +207,13 @@ class HailoWhisperDecoder:
         return self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
 
 
-# ── CPU Whisper Decoder (using openai-whisper) ───────────
-class CPUWhisperDecoder:
-    def __init__(self, variant: str = "base"):
-        import whisper
-        import torch
-        self.variant = variant
-        print(f"[CPU Decoder] Loading whisper-{variant} model...")
-        t = time.time()
-        self.model = whisper.load_model(variant, device="cpu")
-        print(f"[CPU Decoder] Model loaded ({time.time()-t:.2f}s)")
-
-    def decode(self, mel_tensor, language: str = "ja") -> str:
-        """Decode using full CPU whisper model from mel spectrogram."""
-        import torch
-        import whisper
-
-        # mel_tensor should be (80, T) torch tensor
-        if isinstance(mel_tensor, np.ndarray):
-            mel_tensor = torch.from_numpy(mel_tensor).float()
-
-        # Ensure shape is (1, 80, T)
-        if mel_tensor.ndim == 2:
-            mel_tensor = mel_tensor.unsqueeze(0)
-
-        # Use whisper's internal decode
-        options = whisper.DecodingOptions(
-            language=language,
-            without_timestamps=True,
-            fp16=False,
-        )
-        result = whisper.decode(self.model, mel_tensor.squeeze(0), options)
-        return result.text
-
-
 # ── Hybrid: NPU Encoder + CPU Decoder ───────────────────
 def run_hybrid(audio: np.ndarray, encoder_hef: str, variant: str,
                language: str, chunk_length: int):
     """NPU encoder for speed + CPU decoder for accuracy."""
     import torch
     import whisper
+    from whisper.decoding import DecodingTask, DecodingOptions
 
     t1 = time.time()
     mels_nhwc = preprocess_audio_nhwc(audio, chunk_length=chunk_length)
@@ -259,10 +226,10 @@ def run_hybrid(audio: np.ndarray, encoder_hef: str, variant: str,
     print(f"NPU Encoder ready ({time.time()-t2:.2f}s)")
 
     t3 = time.time()
-    cpu_decoder = CPUWhisperDecoder(variant=variant)
-    print(f"CPU Decoder ready ({time.time()-t3:.2f}s)\n")
+    print(f"[CPU] Loading whisper-{variant} model...")
+    cpu_model = whisper.load_model(variant, device="cpu")
+    print(f"CPU model ready ({time.time()-t3:.2f}s)\n")
 
-    # Also prepare mel in whisper's native format for CPU decoder
     segment_samples = chunk_length * SAMPLE_RATE
 
     for i, mel_nhwc in enumerate(mels_nhwc):
@@ -270,38 +237,52 @@ def run_hybrid(audio: np.ndarray, encoder_hef: str, variant: str,
         t_enc_start = time.time()
         npu_encoded = encoder.encode(mel_nhwc)
         t_enc = time.time() - t_enc_start
-        print(f"  NPU encoder: {t_enc:.3f}s, output shape: {npu_encoded.shape}")
 
-        # --- CPU Decoder ---
-        # The NPU encoder output may not be directly compatible with CPU decoder
-        # because the NPU model was quantized/optimized differently.
-        # Instead, we use the CPU model's own encoder output format.
-        # Strategy: use CPU whisper end-to-end but measure encoder separately.
+        # NPU output: (1, T, dim) in NHWC → convert to torch tensor
+        # Squeeze batch and reshape to (1, T, dim) for whisper decoder
+        audio_features = torch.from_numpy(npu_encoded).float()
+        if audio_features.ndim == 2:
+            audio_features = audio_features.unsqueeze(0)  # (1, T, dim)
+        print(f"  NPU encoder: {t_enc:.3f}s, features: {audio_features.shape}")
 
-        # Get the corresponding audio chunk
+        # --- CPU Decoder with NPU features ---
+        t_dec_start = time.time()
+
+        # Monkey-patch the encoder to return our NPU features
+        original_encoder = cpu_model.encoder
+        class NPUEncoderProxy(torch.nn.Module):
+            def __init__(self, features):
+                super().__init__()
+                self._features = features
+                # Copy positional_embedding for shape checks
+                self.positional_embedding = original_encoder.positional_embedding
+            def forward(self, x):
+                return self._features
+
+        cpu_model.encoder = NPUEncoderProxy(audio_features)
+
+        # Prepare mel for shape validation (whisper needs it to set up decoder)
         start_sample = i * segment_samples
         chunk = audio[start_sample:start_sample + segment_samples]
         chunk = pad_or_trim(chunk, segment_samples)
         mel = whisper.log_mel_spectrogram(chunk)  # (80, T) tensor
 
-        t_dec_start = time.time()
-        options = whisper.DecodingOptions(
+        options = DecodingOptions(
             language=language,
             without_timestamps=True,
             fp16=False,
         )
-        # Run full CPU decode (encoder + decoder) for now
-        # TODO: Find a way to inject NPU encoder output into whisper decoder
-        result = whisper.decode(cpu_decoder.model, mel, options)
+        result = whisper.decode(cpu_model, mel, options)
         t_dec = time.time() - t_dec_start
 
-        print(f"  CPU decode: {t_dec:.3f}s")
+        # Restore original encoder
+        cpu_model.encoder = original_encoder
+
+        print(f"  CPU decoder: {t_dec:.3f}s")
         print(f"  Chunk {i+1}: total={t_enc+t_dec:.2f}s")
         print(f"  → {result.text}")
 
-    # Clean up VDevice
-    del encoder
-    del vdevice
+    del encoder, vdevice
 
 
 # ── Full CPU baseline ────────────────────────────────────
