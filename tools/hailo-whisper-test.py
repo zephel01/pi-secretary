@@ -95,11 +95,11 @@ def preprocess_audio_v2(audio: np.ndarray, chunk_length: int = 10):
 # ── Hailo NPU Inference (v5.x InferModel API) ──────────
 class HailoWhisperEncoder:
     def __init__(self, hef_path: str):
-        from hailo_platform import VDevice
+        from hailo_platform import VDevice, FormatType
         self.vdevice = VDevice()
         self.model = self.vdevice.create_infer_model(hef_path)
-        self.model.input().set_format_type("float32")
-        self.model.output().set_format_type("float32")
+        self.model.input().set_format_type(FormatType.FLOAT32)
+        self.model.output().set_format_type(FormatType.FLOAT32)
         self.configured = self.model.configure()
 
         print(f"[Encoder] Input:  {self.model.input_names}")
@@ -121,7 +121,7 @@ class HailoWhisperEncoder:
 
 class HailoWhisperDecoder:
     def __init__(self, hef_path: str, variant: str = "tiny"):
-        from hailo_platform import VDevice
+        from hailo_platform import VDevice, FormatType
         from transformers import AutoTokenizer
 
         self.vdevice = VDevice()
@@ -130,9 +130,9 @@ class HailoWhisperDecoder:
 
         # Set all inputs/outputs to float32
         for name in self.model.input_names:
-            self.model.input(name).set_format_type("float32")
+            self.model.input(name).set_format_type(FormatType.FLOAT32)
         for name in self.model.output_names:
-            self.model.output(name).set_format_type("float32")
+            self.model.output(name).set_format_type(FormatType.FLOAT32)
 
         self.configured = self.model.configure()
 
