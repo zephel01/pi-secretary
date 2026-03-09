@@ -213,13 +213,9 @@ class HailoWhisperDecoder:
             if i == 0:
                 print(f"[Decoder] Combined shape: {combined.shape}")
 
-            # Get next token - shape is (seq, 1, vocab) or (seq, vocab)
-            if combined.ndim == 3:
-                logits = combined[i, :, :].flatten()
-            elif combined.ndim == 2:
-                logits = combined[i, :]
-            else:
-                logits = combined[:, :, :, i].flatten()
+            # Get next token - shape is (1, seq, vocab)
+            # batch=0, position=i, all vocab
+            logits = combined[0, i, :].copy()
             for token in set(generated_tokens[-8:]):
                 if token not in [11, 13]:
                     logits[token] /= 1.5
