@@ -1,5 +1,12 @@
 """
-ai_chat.py — マルチ LLM Chat クライアント + ウェブ検索
+ai_chat.py — デュアル LLM Chat クライアント + ウェブ検索 + メモリ連携
+
+デュアルLLM構成:
+  - OpenClaw (ローカル LLM): 通常の秘書業務・作業指示
+  - クラウド LLM (GLM, Gemini 等): ウェブ検索が必要な質問
+
+検索結果は OpenClaw のメモリ (memory/YYYY-MM-DD.md) に保存され、
+後から OpenClaw が参照できる。
 
 対応バックエンド:
   - OpenAI API (GPT-4o, etc.)
@@ -9,39 +16,65 @@ ai_chat.py — マルチ LLM Chat クライアント + ウェブ検索
 
 ウェブ検索:
   - DuckDuckGo (APIキー不要) を使って検索が必要な質問に自動対応
-  - LLM が検索の必要性を判断 → 検索実行 → 結果をコンテキストとして渡す
 
 環境変数:
-  OPENAI_API_BASE   — API エンドポイント (default: http://127.0.0.1:18789/v1)
-  OPENAI_API_KEY    — API キー
-  OPENAI_MODEL      — モデル名
-  LLM_BACKEND       — バックエンド種別: openai / gemini / openclaw (default: openai)
-  GEMINI_API_KEY    — Gemini API キー (LLM_BACKEND=gemini 時)
-  GEMINI_MODEL      — Gemini モデル名 (default: gemini-2.0-flash)
-  WEB_SEARCH        — 検索機能: on / off (default: on)
-  CHAT_MAX_HISTORY  — 会話履歴の最大数 (default: 20)
-  CHAT_TIMEOUT      — API タイムアウト秒数 (default: 30)
+  OPENAI_API_BASE     — OpenClaw / ローカル LLM エンドポイント (default: http://127.0.0.1:18789/v1)
+  OPENAI_API_KEY      — ローカル LLM API キー
+  OPENAI_MODEL        — ローカル LLM モデル名
+  LLM_BACKEND         — ローカルバックエンド種別: openai / gemini (default: openai)
+  CLOUD_LLM_BASE      — クラウド LLM エンドポイント (検索時に使用)
+  CLOUD_LLM_KEY       — クラウド LLM API キー
+  CLOUD_LLM_MODEL     — クラウド LLM モデル名
+  CLOUD_LLM_BACKEND   — クラウドバックエンド種別: openai / gemini (default: openai)
+  GEMINI_API_KEY      — Gemini API キー
+  GEMINI_MODEL        — Gemini モデル名 (default: gemini-2.0-flash)
+  WEB_SEARCH          — 検索機能: on / off (default: on)
+  OPENCLAW_MEMORY_DIR — OpenClaw メモリディレクトリ (default: /opt/ai-secretary/openclaw/memory)
+  CHAT_MAX_HISTORY    — 会話履歴の最大数 (default: 20)
+  CHAT_TIMEOUT        — API タイムアウト秒数 (default: 30)
 """
 
 import os
 import json
 import logging
 import time
+from datetime import datetime
+from pathlib import Path
 from typing import Optional, Generator
 
 logger = logging.getLogger(__name__)
 
 # --- 設定 ---
+# ローカル LLM (OpenClaw)
 API_BASE = os.getenv("OPENAI_API_BASE", "http://127.0.0.1:18789/v1")
 API_KEY = os.getenv("OPENAI_API_KEY", "")
 MODEL = os.getenv("OPENAI_MODEL", "openclaw")
-LLM_BACKEND = os.getenv("LLM_BACKEND", "openai")  # openai / gemini / openclaw
+LLM_BACKEND = os.getenv("LLM_BACKEND", "openai")
+
+# クラウド LLM (検索時)
+CLOUD_LLM_BASE = os.getenv("CLOUD_LLM_BASE", "")
+CLOUD_LLM_KEY = os.getenv("CLOUD_LLM_KEY", "")
+CLOUD_LLM_MODEL = os.getenv("CLOUD_LLM_MODEL", "")
+CLOUD_LLM_BACKEND = os.getenv("CLOUD_LLM_BACKEND", "openai")
+
+# Gemini
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+
+# 共通
 WEB_SEARCH = os.getenv("WEB_SEARCH", "on").lower() in ("on", "true", "1", "yes")
 MAX_HISTORY = int(os.getenv("CHAT_MAX_HISTORY", "20"))
 TIMEOUT = int(os.getenv("CHAT_TIMEOUT", "30"))
 CHARACTER = os.getenv("CHARACTER", "zundamon")
+
+# OpenClaw メモリ
+OPENCLAW_MEMORY_DIR = os.getenv(
+    "OPENCLAW_MEMORY_DIR",
+    "/opt/ai-secretary/openclaw/memory",
+)
+
+# デュアルLLM が有効か（クラウド側が設定されているか）
+DUAL_LLM_ENABLED = bool(CLOUD_LLM_BASE and CLOUD_LLM_KEY and CLOUD_LLM_MODEL)
 
 # --- キャラクタープロファイル ---
 CHARACTER_PROFILES = {
@@ -112,7 +145,11 @@ SEARCH_HINT_KEYWORDS = [
 
 class AiChat:
     """
-    マルチバックエンド AI Chat クライアント + ウェブ検索。
+    デュアル LLM Chat クライアント。
+
+    - 通常の質問 → ローカル LLM (OpenClaw)
+    - 検索が必要な質問 → クラウド LLM (GLM 等) + DuckDuckGo
+    - 検索結果は OpenClaw のメモリに保存
     """
 
     def __init__(
@@ -136,33 +173,7 @@ class AiChat:
 
         # システムプロンプト
         if system_prompt is None:
-            # 1. キャラクター別プロンプトファイルを探す
-            char_dir = os.getenv(
-                "CHARACTER_DIR",
-                "/opt/ai-secretary/pi-secretary/config/characters",
-            )
-            char_file = os.path.join(char_dir, f"{CHARACTER}.txt")
-
-            # 2. 従来のカスタムプロンプトファイル (互換性)
-            legacy_file = os.getenv(
-                "SYSTEM_PROMPT_FILE",
-                "/opt/ai-secretary/voice-bridge/custom/secretary_prompt.txt",
-            )
-
-            if os.path.isfile(char_file):
-                with open(char_file, "r", encoding="utf-8") as f:
-                    system_prompt = f.read().strip()
-                profile_name = CHARACTER_PROFILES.get(CHARACTER, {}).get("name", CHARACTER)
-                logger.info(f"キャラクター: {profile_name} ({char_file})")
-            elif os.path.isfile(legacy_file):
-                with open(legacy_file, "r", encoding="utf-8") as f:
-                    system_prompt = f.read().strip()
-                logger.info(f"システムプロンプト読み込み: {legacy_file}")
-            else:
-                # フォールバック: 内蔵プロファイル
-                profile = CHARACTER_PROFILES.get(CHARACTER, CHARACTER_PROFILES["normal"])
-                system_prompt = profile["prompt"]
-                logger.info(f"キャラクター: {profile['name']} (内蔵)")
+            system_prompt = self._load_system_prompt()
 
         # 検索対応のシステムプロンプト拡張
         if self.web_search_enabled:
@@ -175,18 +186,59 @@ class AiChat:
         self.system_prompt_text = system_prompt
         self.system_message = {"role": "system", "content": system_prompt}
 
-        # クライアント初期化
+        # ローカル LLM クライアント初期化
         self._init_client()
 
+        # クラウド LLM クライアント初期化 (デュアルLLM)
+        self._cloud_client = None
+        if DUAL_LLM_ENABLED:
+            self._init_cloud_client()
+            logger.info(
+                f"デュアルLLM: ローカル={self.base_url} / "
+                f"クラウド={CLOUD_LLM_BASE} ({CLOUD_LLM_MODEL})"
+            )
+        else:
+            logger.info("シングルLLM モード (クラウド未設定)")
+
+    def _load_system_prompt(self) -> str:
+        """システムプロンプトをファイルまたは内蔵から読み込む"""
+        # 1. キャラクター別プロンプトファイル
+        char_dir = os.getenv(
+            "CHARACTER_DIR",
+            "/opt/ai-secretary/pi-secretary/config/characters",
+        )
+        char_file = os.path.join(char_dir, f"{CHARACTER}.txt")
+
+        # 2. 従来のカスタムプロンプトファイル (互換性)
+        legacy_file = os.getenv(
+            "SYSTEM_PROMPT_FILE",
+            "/opt/ai-secretary/voice-bridge/custom/secretary_prompt.txt",
+        )
+
+        if os.path.isfile(char_file):
+            with open(char_file, "r", encoding="utf-8") as f:
+                prompt = f.read().strip()
+            profile_name = CHARACTER_PROFILES.get(CHARACTER, {}).get("name", CHARACTER)
+            logger.info(f"キャラクター: {profile_name} ({char_file})")
+            return prompt
+        elif os.path.isfile(legacy_file):
+            with open(legacy_file, "r", encoding="utf-8") as f:
+                prompt = f.read().strip()
+            logger.info(f"システムプロンプト読み込み: {legacy_file}")
+            return prompt
+        else:
+            profile = CHARACTER_PROFILES.get(CHARACTER, CHARACTER_PROFILES["normal"])
+            logger.info(f"キャラクター: {profile['name']} (内蔵)")
+            return profile["prompt"]
+
     def _init_client(self):
-        """バックエンドに応じたクライアントを初期化"""
+        """ローカル LLM バックエンドに応じたクライアントを初期化"""
         self._use_openai_lib = False
         self._use_gemini = False
 
         if self.backend == "gemini":
             self._init_gemini()
         else:
-            # openai / openclaw / その他 OpenAI 互換
             self._init_openai()
 
     def _init_openai(self):
@@ -199,7 +251,7 @@ class AiChat:
                 timeout=TIMEOUT,
             )
             self._use_openai_lib = True
-            logger.info(f"OpenAI 互換クライアント: {self.base_url} (model={self.model})")
+            logger.info(f"ローカルLLM: {self.base_url} (model={self.model})")
         except ImportError:
             import requests as _req
             self._requests = _req
@@ -219,12 +271,35 @@ class AiChat:
             self._use_gemini = True
             logger.info(f"Gemini クライアント: {self.gemini_model}")
         except ImportError:
-            logger.error("google-generativeai がインストールされていません: "
-                          "pip3 install google-generativeai --break-system-packages")
-            # フォールバック: OpenAI 互換に切り替え
+            logger.error("google-generativeai がインストールされていません")
             logger.info("OpenAI 互換にフォールバック")
             self.backend = "openai"
             self._init_openai()
+
+    def _init_cloud_client(self):
+        """クラウド LLM クライアント初期化 (検索時用)"""
+        try:
+            if CLOUD_LLM_BACKEND == "gemini":
+                import google.generativeai as genai
+                genai.configure(api_key=CLOUD_LLM_KEY)
+                self._cloud_gemini_model = genai.GenerativeModel(
+                    CLOUD_LLM_MODEL,
+                    system_instruction=self.system_prompt_text,
+                )
+                self._cloud_gemini_chat = self._cloud_gemini_model.start_chat(history=[])
+                self._cloud_client = "gemini"
+            else:
+                from openai import OpenAI
+                self._cloud_openai = OpenAI(
+                    base_url=CLOUD_LLM_BASE.rstrip("/"),
+                    api_key=CLOUD_LLM_KEY,
+                    timeout=TIMEOUT,
+                )
+                self._cloud_client = "openai"
+            logger.info(f"クラウドLLM: {CLOUD_LLM_BASE} ({CLOUD_LLM_MODEL})")
+        except Exception as e:
+            logger.error(f"クラウドLLM 初期化失敗: {e}")
+            self._cloud_client = None
 
     # --- 検索判定 ---
 
@@ -237,21 +312,17 @@ class AiChat:
 
     def _extract_search_query(self, user_text: str) -> str:
         """ユーザー発話から検索クエリを抽出"""
+        import re
         query = user_text
 
-        # ウェイクワードを除去
-        import re
         wake = os.getenv("WAKE_WORD", "").strip()
         if wake:
-            # 「ずんだもん」「ずんだも」等の部分一致も除去
             query = re.sub(rf"{re.escape(wake)}[、，,\s]*", "", query)
-            # STT が途中で切った場合 (例: 「ずんだも」)
             if len(wake) >= 3:
                 for i in range(2, len(wake)):
                     partial = wake[:i]
                     query = re.sub(rf"^{re.escape(partial)}[、，,\s]*", "", query)
 
-        # 不要な接尾辞を除去
         remove_words = [
             "検索して", "調べて", "ググって", "教えて",
             "について調べて", "について教えて", "について検索して",
@@ -271,16 +342,73 @@ class AiChat:
             logger.warning("web_search.py が見つかりません")
             return ""
 
+    # --- OpenClaw メモリ連携 ---
+
+    def _save_to_memory(self, query: str, search_result: str, reply: str):
+        """検索結果を OpenClaw のメモリ (日次ログ) に保存"""
+        try:
+            memory_dir = Path(OPENCLAW_MEMORY_DIR)
+            memory_dir.mkdir(parents=True, exist_ok=True)
+
+            today = datetime.now().strftime("%Y-%m-%d")
+            memory_file = memory_dir / f"{today}.md"
+
+            timestamp = datetime.now().strftime("%H:%M")
+            entry = (
+                f"\n## [{timestamp}] 検索: {query}\n\n"
+                f"**検索結果サマリー:**\n{reply}\n\n"
+                f"---\n"
+            )
+
+            with open(memory_file, "a", encoding="utf-8") as f:
+                f.write(entry)
+
+            logger.info(f"メモリ保存: {memory_file}")
+        except Exception as e:
+            logger.warning(f"メモリ保存失敗: {e}")
+
+    # --- クラウド LLM での応答 ---
+
+    def _chat_cloud(self, messages: list[dict]) -> str:
+        """クラウド LLM で応答を得る"""
+        if self._cloud_client == "gemini":
+            # Gemini
+            user_text = messages[-1]["content"]
+            response = self._cloud_gemini_chat.send_message(user_text)
+            return response.text.strip()
+        elif self._cloud_client == "openai":
+            # OpenAI 互換
+            response = self._cloud_openai.chat.completions.create(
+                model=CLOUD_LLM_MODEL,
+                messages=messages,
+                max_tokens=512,
+                temperature=0.4,
+            )
+            return response.choices[0].message.content.strip()
+        else:
+            raise RuntimeError("クラウドLLM が初期化されていません")
+
     # --- メインの chat ---
 
     def chat(self, user_text: str) -> str:
-        """テキストを送って応答を得る。検索が必要なら自動で検索する。"""
+        """
+        テキストを送って応答を得る。
+
+        デュアルLLM モード:
+          - 検索が必要 → クラウド LLM + DuckDuckGo → 結果をメモリに保存
+          - 通常の質問 → ローカル LLM (OpenClaw)
+
+        シングルLLM モード (クラウド未設定):
+          - 従来通り、設定されたバックエンドですべて処理
+        """
         if not user_text.strip():
             return ""
 
-        # 検索判定 & 実行
+        # 検索判定
+        needs_search = self._needs_search(user_text)
         search_context = ""
-        if self._needs_search(user_text):
+
+        if needs_search:
             query = self._extract_search_query(user_text)
             logger.info(f"検索実行: {query}")
             search_context = self._search_web(query)
@@ -302,15 +430,43 @@ class AiChat:
         messages = [self.system_message] + self.history
 
         try:
-            if self._use_gemini:
-                reply = self._chat_gemini(augmented_text)
-            elif self._use_openai_lib:
-                reply = self._chat_openai(messages)
+            if needs_search and search_context and DUAL_LLM_ENABLED and self._cloud_client:
+                # 検索あり → クラウド LLM
+                logger.info("クラウドLLM で応答生成")
+                reply = self._chat_cloud(messages)
+
+                # 検索結果をOpenClawメモリに保存
+                self._save_to_memory(
+                    query=self._extract_search_query(user_text),
+                    search_result=search_context,
+                    reply=reply,
+                )
             else:
-                reply = self._chat_requests(messages)
+                # 通常 → ローカル LLM
+                if self._use_gemini:
+                    reply = self._chat_gemini(augmented_text)
+                elif self._use_openai_lib:
+                    reply = self._chat_openai(messages)
+                else:
+                    reply = self._chat_requests(messages)
+
         except Exception as e:
             logger.error(f"Chat API エラー: {e}")
-            reply = "すみません、通信エラーが発生しました。もう一度お願いします。"
+            # クラウド失敗時はローカルにフォールバック
+            if needs_search and DUAL_LLM_ENABLED:
+                logger.info("クラウドLLM 失敗、ローカルLLM にフォールバック")
+                try:
+                    if self._use_gemini:
+                        reply = self._chat_gemini(augmented_text)
+                    elif self._use_openai_lib:
+                        reply = self._chat_openai(messages)
+                    else:
+                        reply = self._chat_requests(messages)
+                except Exception as e2:
+                    logger.error(f"ローカルLLM もエラー: {e2}")
+                    reply = "すみません、通信エラーが発生しました。もう一度お願いします。"
+            else:
+                reply = "すみません、通信エラーが発生しました。もう一度お願いします。"
 
         self.history.append({"role": "assistant", "content": reply})
         self._trim_history()
@@ -319,82 +475,18 @@ class AiChat:
 
     def chat_stream(self, user_text: str) -> Generator[str, None, None]:
         """ストリーミング応答。文単位で yield する。"""
-        if not user_text.strip():
-            return
-
-        # 検索判定 & 実行
-        search_context = ""
-        if self._needs_search(user_text):
-            query = self._extract_search_query(user_text)
-            logger.info(f"検索実行: {query}")
-            search_context = self._search_web(query)
-
-        if search_context:
-            augmented_text = (
-                f"{user_text}\n\n"
-                f"【参考: ウェブ検索結果】\n{search_context}"
-            )
-        else:
-            augmented_text = user_text
-
-        self.history.append({"role": "user", "content": augmented_text})
-        self._trim_history()
-
-        messages = [self.system_message] + self.history
-        full_reply = ""
-
-        try:
-            if self._use_gemini:
-                # Gemini ストリーミング
-                reply = self._chat_gemini(augmented_text)
-                full_reply = reply
-                yield reply
-            elif self._use_openai_lib:
-                stream = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    stream=True,
-                    max_tokens=512,
-                    temperature=0.4,
-                )
-                buffer = ""
-                for chunk in stream:
-                    delta = chunk.choices[0].delta
-                    if delta.content:
-                        buffer += delta.content
-                        full_reply += delta.content
-
-                        while any(sep in buffer for sep in ["。", "！", "？", "\n"]):
-                            for sep in ["。", "！", "？", "\n"]:
-                                idx = buffer.find(sep)
-                                if idx >= 0:
-                                    sentence = buffer[: idx + 1].strip()
-                                    buffer = buffer[idx + 1 :]
-                                    if sentence:
-                                        yield sentence
-                                    break
-
-                if buffer.strip():
-                    yield buffer.strip()
-            else:
-                reply = self._chat_requests(messages)
-                full_reply = reply
-                yield reply
-
-        except Exception as e:
-            logger.error(f"Stream API エラー: {e}")
-            full_reply = "すみません、通信エラーが発生しました。"
-            yield full_reply
-
-        self.history.append({"role": "assistant", "content": full_reply})
-        self._trim_history()
+        # ストリーミングはシンプルに chat() を使う
+        # (デュアルLLM対応のストリーミングは複雑になるため)
+        reply = self.chat(user_text)
+        if reply:
+            yield reply
 
     # --- translator.py 互換 ---
 
     def translate(self, text: str, _src: str = None, _tgt: str = None) -> str:
         return self.chat(text)
 
-    # --- バックエンド別メソッド ---
+    # --- バックエンド別メソッド (ローカル LLM) ---
 
     def _chat_openai(self, messages: list[dict]) -> str:
         """OpenAI 互換 API"""
@@ -440,7 +532,6 @@ class AiChat:
     def clear_history(self):
         self.history.clear()
         if self._use_gemini:
-            # Gemini チャット履歴もリセット
             import google.generativeai as genai
             self._gemini_chat = self._gemini_model.start_chat(history=[])
         logger.info("会話履歴をクリアしました")
