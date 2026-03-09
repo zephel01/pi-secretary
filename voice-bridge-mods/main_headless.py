@@ -81,12 +81,17 @@ except ImportError:
     AudioTranscriber = None
     logger.warning("transcriber.py が見つかりません。STT を直接実装します。")
 
-# TTS — 既存の tts_voicevox.py / tts_engine.py を使う
+# TTS — 既存の tts_voicevox.py / tts_engine.py / tts_coeiroink.py を使う
 try:
     from tts_voicevox import VoicevoxTTS
 except ImportError:
     VoicevoxTTS = None
     logger.warning("tts_voicevox.py が見つかりません")
+
+try:
+    from tts_coeiroink import CoeiroinkTTS
+except ImportError:
+    CoeiroinkTTS = None
 
 try:
     from tts_engine import EdgeTTSEngine
@@ -98,7 +103,9 @@ except ImportError:
 WAKE_WORD = os.getenv("WAKE_WORD", "ずんだもん")
 STT_MODEL_SIZE = os.getenv("STT_MODEL_SIZE", "base")
 STT_LANGUAGE = os.getenv("STT_LANGUAGE", "ja")
+TTS_ENGINE_TYPE = os.getenv("TTS_ENGINE", "voicevox").lower()  # voicevox / coeiroink
 VOICEVOX_URL = os.getenv("VOICEVOX_URL", "http://127.0.0.1:50021")
+COEIROINK_URL = os.getenv("COEIROINK_URL", "http://127.0.0.1:50032")
 CHARACTER = os.getenv("CHARACTER", "zundamon")
 USE_WAKE_WORD = bool(WAKE_WORD.strip())
 
@@ -134,6 +141,11 @@ CHARACTER_MESSAGES = {
         "startup": "起動したよ〜！なんでも聞いてね！",
         "ready": "はーい！なんでも聞いてよ〜！",
         "error": "ごめん、エラーが出ちゃった〜。",
+    },
+    "lilin": {
+        "startup": "起動したよ〜！リリンに何でも聞いてね！",
+        "ready": "はいはい、何〜？",
+        "error": "あちゃ〜、エラーだって〜。",
     },
     "normal": {
         "startup": "起動しました。ご用件をどうぞ。",
@@ -192,13 +204,26 @@ class VoiceBridgeHeadless:
             return None
 
     def _init_tts(self):
-        """TTS 初期化 (VOICEVOX 優先、Edge TTS フォールバック)"""
-        # VOICEVOX チェック
+        """TTS 初期化 (TTS_ENGINE 設定に応じて選択)"""
+        import requests as _req
+
+        # --- COEIROINK ---
+        if TTS_ENGINE_TYPE == "coeiroink" and CoeiroinkTTS:
+            try:
+                resp = _req.get(f"{COEIROINK_URL}/v1/speakers", timeout=5)
+                if resp.status_code == 200:
+                    tts = CoeiroinkTTS(host=COEIROINK_URL)
+                    logger.info(f"COEIROINK 接続OK ({COEIROINK_URL})")
+                    return tts
+            except Exception as e:
+                logger.warning(f"COEIROINK 接続失敗: {e}")
+                # フォールバック: VOICEVOX を試す
+                logger.info("VOICEVOX にフォールバック")
+
+        # --- VOICEVOX ---
         if VoicevoxTTS:
             try:
-                import requests
-
-                resp = requests.get(f"{VOICEVOX_URL}/version", timeout=3)
+                resp = _req.get(f"{VOICEVOX_URL}/version", timeout=3)
                 if resp.status_code == 200:
                     tts = VoicevoxTTS(
                         host=VOICEVOX_URL,
@@ -209,7 +234,7 @@ class VoiceBridgeHeadless:
             except Exception as e:
                 logger.warning(f"VOICEVOX 接続失敗: {e}")
 
-        # Edge TTS フォールバック
+        # --- Edge TTS フォールバック ---
         if EdgeTTSEngine:
             logger.info("Edge TTS にフォールバック")
             return EdgeTTSEngine()
@@ -299,6 +324,19 @@ class VoiceBridgeHeadless:
 
         self._is_playing = True
         try:
+            # COEIROINK
+            if CoeiroinkTTS and isinstance(self.tts, CoeiroinkTTS):
+                wav_path = self.tts.synthesize(clean)
+                if wav_path and os.path.isfile(wav_path):
+                    play_wav(wav_path)
+                    try:
+                        os.unlink(wav_path)
+                    except OSError:
+                        pass
+                else:
+                    logger.warning("COEIROINK 合成失敗")
+                return
+
             # VOICEVOX
             if VoicevoxTTS and isinstance(self.tts, VoicevoxTTS):
                 wav_path = self.tts.synthesize(clean)
