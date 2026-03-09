@@ -125,19 +125,33 @@ class AiChat:
 
         # システムプロンプト
         if system_prompt is None:
-            prompt_file = os.getenv(
+            # 1. キャラクター別プロンプトファイルを探す
+            char_dir = os.getenv(
+                "CHARACTER_DIR",
+                "/opt/ai-secretary/pi-secretary/config/characters",
+            )
+            char_file = os.path.join(char_dir, f"{CHARACTER}.txt")
+
+            # 2. 従来のカスタムプロンプトファイル (互換性)
+            legacy_file = os.getenv(
                 "SYSTEM_PROMPT_FILE",
                 "/opt/ai-secretary/voice-bridge/custom/secretary_prompt.txt",
             )
-            if os.path.isfile(prompt_file):
-                with open(prompt_file, "r", encoding="utf-8") as f:
+
+            if os.path.isfile(char_file):
+                with open(char_file, "r", encoding="utf-8") as f:
                     system_prompt = f.read().strip()
-                logger.info(f"システムプロンプト読み込み: {prompt_file}")
+                profile_name = CHARACTER_PROFILES.get(CHARACTER, {}).get("name", CHARACTER)
+                logger.info(f"キャラクター: {profile_name} ({char_file})")
+            elif os.path.isfile(legacy_file):
+                with open(legacy_file, "r", encoding="utf-8") as f:
+                    system_prompt = f.read().strip()
+                logger.info(f"システムプロンプト読み込み: {legacy_file}")
             else:
-                # キャラクタープロファイルから取得
+                # フォールバック: 内蔵プロファイル
                 profile = CHARACTER_PROFILES.get(CHARACTER, CHARACTER_PROFILES["normal"])
                 system_prompt = profile["prompt"]
-                logger.info(f"キャラクター: {profile['name']} ({CHARACTER})")
+                logger.info(f"キャラクター: {profile['name']} (内蔵)")
 
         # 検索対応のシステムプロンプト拡張
         if self.web_search_enabled:

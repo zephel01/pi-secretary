@@ -49,6 +49,31 @@ except ImportError:
     sys.path.insert(0, os.path.dirname(__file__))
     from ai_chat import AiChat
 
+# --- STT 誤認識補正 ---
+_stt_corrections = {}
+_stt_corrections_file = os.getenv(
+    "STT_CORRECTIONS_FILE",
+    "/opt/ai-secretary/pi-secretary/config/stt_corrections.json",
+)
+try:
+    import json
+    if os.path.isfile(_stt_corrections_file):
+        with open(_stt_corrections_file, "r", encoding="utf-8") as _f:
+            _data = json.load(_f)
+            _stt_corrections = _data.get("corrections", {})
+        logger.info(f"STT 補正ルール読み込み: {len(_stt_corrections)} 件")
+except Exception as _e:
+    logger.warning(f"STT 補正ファイル読み込みエラー: {_e}")
+
+
+def apply_stt_corrections(text: str) -> str:
+    """STT の誤認識を補正する"""
+    for wrong, correct in _stt_corrections.items():
+        if wrong in text:
+            text = text.replace(wrong, correct)
+    return text
+
+
 # STT — 既存の transcriber.py をそのまま使う
 try:
     from transcriber import AudioTranscriber
@@ -320,7 +345,13 @@ class VoiceBridgeHeadless:
         if not text:
             return
 
-        logger.info(f"認識: {text}")
+        # STT 誤認識を補正
+        corrected = apply_stt_corrections(text)
+        if corrected != text:
+            logger.info(f"認識: {text} → 補正: {corrected}")
+            text = corrected
+        else:
+            logger.info(f"認識: {text}")
 
         # ウェイクワード判定
         triggered, command_text = self._check_wake_word(text)
